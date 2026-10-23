@@ -1,167 +1,292 @@
-"""Reporte Excel con hojas Resumen, Detalle e Incidencias."""
+"""Reporte Excel de una sola hoja: encabezado, indicadores y tabla de facturas."""
 
 from __future__ import annotations
 
 import io
+from dataclasses import dataclass
+from datetime import datetime
 
 import pandas as pd
 
-from .auditoria import COLUMNAS_MONEDA, COLUMNAS_MXN, Resultado, describir_config
+from .auditoria import BASES, FUENTES_TC, Resultado
 
-AZUL = "#2E4057"
-ANCHOS = {
-    "Archivo": 28, "UUID": 38, "Versión": 8, "Tipo": 22, "Serie": 8, "Folio": 10,
-    "Fecha emisión": 18, "Periodo": 10, "RFC emisor": 15, "Nombre emisor": 30,
-    "RFC receptor": 15, "Nombre receptor": 30, "Moneda": 8, "Tipo de cambio": 12,
-    "Fuente TC": 16, "¿Incluida?": 10, "Motivo de exclusión": 34, "Estado SAT": 14,
-    "Código SAT": 30, "Estatus cancelación": 18, "Es cancelable": 18, "Emisor en EFOS": 10,
-    "Método de pago": 10, "Uso CFDI": 9, "CFDI relacionados": 30, "Descripción": 50,
-    "Observaciones": 40, "Verificar en SAT": 14,
-}
+FUENTE = "Arial"
+CARBON, GRAFITO, CENIZA = "#181925", "#666666", "#999999"
+NIEBLA, LINO, BRUMA = "#E8E8E8", "#FAFAFA", "#F5F5F5"
+LAVANDA, CIELO = "#918DF6", "#2C78FC"
+MENTA, MENTA_FONDO = "#1E9E46", "#DEF6E4"
+ROJO, ROJO_FONDO = "#C62828", "#FDE7E7"
+AMBAR, AMBAR_FONDO = "#9A6400", "#FFF2D6"
+
+FILA_TITULO = 1
+FILA_INDICADORES = 5     # etiqueta en esta fila, valor en la siguiente
+COLUMNA_INICIAL = 1      # la columna A queda como margen
+
+
+@dataclass
+class Columna:
+    titulo: str
+    ancho: float
+    tipo: str = "texto"   # texto | dinero | tc | fecha | liga | estado
+    total: bool = False
+
+
+COLUMNAS_CALCULO = [
+    Columna("Estado SAT", 14, "estado"), Columna("¿Cuenta?", 10),
+    Columna("Fecha", 11, "fecha"), Columna("Serie y folio", 14),
+    Columna("RFC emisor", 15), Columna("Emisor", 30),
+    Columna("RFC receptor", 15), Columna("Receptor", 30),
+    Columna("Tipo", 12), Columna("Moneda", 9),
+    Columna("Subtotal", 14, "dinero"), Columna("Total", 14, "dinero"),
+    Columna("Tipo de cambio", 12, "tc"), Columna("Base MXN", 16, "dinero", True),
+    Columna("Contraprestación", 17, "dinero", True), Columna("Notas", 42),
+    Columna("Concepto", 40), Columna("UUID", 38), Columna("SAT", 9, "liga"),
+    Columna("Archivo", 30),
+]
+
+COLUMNAS_VERIFICACION = [
+    Columna("Estado SAT", 14, "estado"), Columna("EFOS", 9),
+    Columna("Fecha", 11, "fecha"), Columna("Serie y folio", 14),
+    Columna("RFC emisor", 15), Columna("Emisor", 30),
+    Columna("RFC receptor", 15), Columna("Receptor", 30),
+    Columna("Tipo", 12), Columna("Moneda", 9),
+    Columna("Total", 14, "dinero"), Columna("Estatus cancelación", 20),
+    Columna("Notas", 42), Columna("Concepto", 40), Columna("UUID", 38),
+    Columna("SAT", 9, "liga"), Columna("Archivo", 30),
+]
+
+
+def tabla_reporte(resultado: Resultado) -> pd.DataFrame:
+    """Tabla compacta (la misma que se ve en la app y en el Excel)."""
+    d = resultado.detalle
+    calcular = resultado.config.calcular
+    notas = []
+    for motivo, obs in zip(d["Motivo de exclusión"], d["Observaciones"]):
+        if not calcular and not motivo.startswith(("Error de lectura", "UUID duplicado")):
+            motivo = ""
+        notas.append(" · ".join(t for t in (motivo, obs.replace("; ", " · ")) if t))
+    serie_folio = [("-".join(p for p in (s, f) if p)) for s, f in zip(d["Serie"], d["Folio"])]
+    t = pd.DataFrame({
+        "Estado SAT": d["Estado SAT"].where(d["Estado SAT"] != "", "Sin consultar"),
+        "¿Cuenta?": d["¿Incluida?"],
+        "EFOS": d["Emisor en EFOS"],
+        "Fecha": pd.to_datetime(d["Fecha emisión"]),
+        "Serie y folio": serie_folio,
+        "RFC emisor": d["RFC emisor"], "Emisor": d["Nombre emisor"],
+        "RFC receptor": d["RFC receptor"], "Receptor": d["Nombre receptor"],
+        "Tipo": d["Tipo"].str.split(" - ").str[-1].str.replace(" (nota de crédito)", "",
+                                                                 regex=False),
+        "Moneda": d["Moneda"], "Subtotal": d["Subtotal"], "Total": d["Total"],
+        "Tipo de cambio": d["Tipo de cambio"],
+        # Las que no cuentan se dejan en blanco para que los totales cuadren.
+        "Base MXN": d["Base MXN"].where(d["¿Incluida?"] == "Sí"),
+        "Contraprestación": d["Contraprestación MXN"].where(d["¿Incluida?"] == "Sí"),
+        "Estatus cancelación": d["Estatus cancelación"],
+        "Notas": notas, "Concepto": d["Descripción"], "UUID": d["UUID"],
+        "SAT": d["Verificar en SAT"], "Archivo": d["Archivo"],
+    })
+    columnas = COLUMNAS_CALCULO if calcular else COLUMNAS_VERIFICACION
+    return t[[c.titulo for c in columnas]]
 
 
 def generar_excel(resultado: Resultado) -> bytes:
     salida = io.BytesIO()
     with pd.ExcelWriter(salida, engine="xlsxwriter") as writer:
         wb = writer.book
+        ws = wb.add_worksheet("Auditoría")
+        writer.sheets["Auditoría"] = ws
         f = _formatos(wb)
-        _hoja_resumen(writer, wb, f, resultado)
-        _hoja_tabla(writer, wb, f, "Detalle", resultado.detalle, resultado)
-        _hoja_tabla(writer, wb, f, "Incidencias", resultado.incidencias, resultado)
+        columnas = COLUMNAS_CALCULO if resultado.config.calcular else COLUMNAS_VERIFICACION
+        tabla = tabla_reporte(resultado)
+
+        ws.hide_gridlines(2)
+        ws.set_column(0, 0, 2)
+        for j, col in enumerate(columnas, COLUMNA_INICIAL):
+            ws.set_column(j, j, col.ancho)
+
+        fila = _encabezado(ws, f, resultado, len(columnas))
+        fila = _indicadores(ws, f, resultado, fila)
+        _tabla(ws, f, tabla, columnas, fila + 1)
     return salida.getvalue()
 
 
 def _formatos(wb) -> dict:
-    base = {"font_name": "Arial", "font_size": 10, "valign": "vcenter"}
+    def fmt(**kw):
+        return wb.add_format({"font_name": FUENTE, "font_size": 10, "font_color": CARBON,
+                              "valign": "vcenter", **kw})
+
+    celda = dict(bottom=1, bottom_color=NIEBLA)
     return {
-        "titulo": wb.add_format({**base, "bold": True, "font_size": 16, "font_color": AZUL}),
-        "sub": wb.add_format({**base, "bold": True, "font_size": 11, "font_color": "white",
-                              "bg_color": AZUL}),
-        "encabezado": wb.add_format({**base, "bold": True, "font_color": "white",
-                                     "bg_color": AZUL, "text_wrap": True}),
-        "etiqueta": wb.add_format({**base, "bold": True, "font_color": "#555555"}),
-        "texto": wb.add_format(base),
-        "dinero": wb.add_format({**base, "num_format": "#,##0.00"}),
-        "dinero_b": wb.add_format({**base, "num_format": "$#,##0.00", "bold": True,
-                                   "font_size": 12, "bg_color": "#E3F2FD"}),
-        "entero": wb.add_format({**base, "num_format": "#,##0"}),
-        "tc": wb.add_format({**base, "num_format": "#,##0.0000"}),
-        "fecha": wb.add_format({**base, "num_format": "dd/mm/yyyy hh:mm"}),
-        "aviso": wb.add_format({**base, "font_color": "#856404", "bg_color": "#FFF3CD",
-                                "text_wrap": True}),
-        "excluida": wb.add_format({"font_color": "#7F7F7F", "bg_color": "#F2F2F2"}),
-        "cancelada": wb.add_format({"font_color": "#9C0006", "bg_color": "#FFC7CE"}),
-        "efos": wb.add_format({"font_color": "#9C5700", "bg_color": "#FFEB9C"}),
+        "titulo": fmt(font_size=20, bold=True),
+        "subtitulo": fmt(font_color=GRAFITO, font_size=11),
+        "parametros": fmt(font_color=CENIZA, font_size=9),
+        "ind_etiqueta": fmt(font_color=CENIZA, font_size=9, bg_color=LINO, top=1,
+                            top_color=NIEBLA, left=1, left_color=NIEBLA, right=1,
+                            right_color=NIEBLA, indent=1),
+        "ind_valor": fmt(font_size=16, bold=True, bg_color=LINO, bottom=1, bottom_color=NIEBLA,
+                         left=1, left_color=NIEBLA, right=1, right_color=NIEBLA, indent=1,
+                         align="left"),
+        "ind_dinero": fmt(font_size=16, bold=True, bg_color=LINO, bottom=1, bottom_color=NIEBLA,
+                          left=1, left_color=NIEBLA, right=1, right_color=NIEBLA, indent=1,
+                          align="left", num_format="$#,##0.00"),
+        "ind_etiqueta_dest": fmt(font_color=MENTA, font_size=9, bold=True, bg_color=MENTA_FONDO,
+                                 top=1, top_color=MENTA_FONDO, indent=1),
+        "ind_dinero_dest": fmt(font_size=16, bold=True, bg_color=MENTA_FONDO, indent=1,
+                               align="left", num_format="$#,##0.00"),
+        "nota": fmt(font_color=GRAFITO, font_size=9),
+        "aviso": fmt(font_color=AMBAR, font_size=9),
+        "encabezado": fmt(bold=True, bg_color=BRUMA, bottom=1, bottom_color=CARBON,
+                          text_wrap=True, indent=1),
+        "encabezado_num": fmt(bold=True, bg_color=BRUMA, bottom=1, bottom_color=CARBON,
+                              text_wrap=True, align="right"),
+        "texto": fmt(**celda, indent=1),
+        "dinero": fmt(**celda, num_format="#,##0.00"),
+        "tc": fmt(**celda, num_format="#,##0.0000"),
+        "fecha": fmt(**celda, num_format="dd/mm/yyyy", align="left", indent=1),
+        "liga": fmt(**celda, font_color=CIELO, underline=1, indent=1),
+        "estado": fmt(**celda, bold=True, indent=1),
+        "total_etiqueta": fmt(bold=True, top=1, top_color=CARBON),
+        "total": fmt(bold=True, top=1, top_color=CARBON, num_format="#,##0.00"),
+        "vigente": wb.add_format({"font_color": MENTA, "bg_color": MENTA_FONDO}),
+        "cancelado": wb.add_format({"font_color": ROJO, "bg_color": ROJO_FONDO}),
+        "pendiente": wb.add_format({"font_color": AMBAR, "bg_color": AMBAR_FONDO}),
+        "no_cuenta": wb.add_format({"font_color": CENIZA}),
+        "efos": wb.add_format({"font_color": ROJO, "bold": True}),
     }
 
 
-def _escribir_tabla(ws, fila: int, df: pd.DataFrame, f: dict, formatos_col: dict) -> int:
-    for j, col in enumerate(df.columns):
-        ws.write(fila, j, col, f["sub"])
-    for i, registro in enumerate(df.itertuples(index=False), 1):
-        for j, (col, valor) in enumerate(zip(df.columns, registro)):
-            ws.write(fila + i, j, valor, formatos_col.get(col, f["texto"]))
-    return fila + len(df) + 2
+def _encabezado(ws, f, r: Resultado, n_columnas: int) -> int:
+    c = r.config
+    ws.set_row(0, 10)
+    ws.set_row(FILA_TITULO, 32)
+    ws.write(FILA_TITULO, COLUMNA_INICIAL, "Auditoría de CFDIs", f["titulo"])
+    modo = "Verificación y cálculo de contraprestación" if c.calcular else "Verificación ante el SAT"
+    ws.write(FILA_TITULO + 1, COLUMNA_INICIAL,
+             f"{modo}  ·  Periodo {c.fecha_inicio:%d/%m/%Y} – {c.fecha_fin:%d/%m/%Y}  ·  "
+             f"Generado {datetime.now():%d/%m/%Y %H:%M}", f["subtitulo"])
+    if c.calcular:
+        tc = FUENTES_TC[c.fuente_tc] if c.fuente_tc != "manual" else f"manual ({c.tc_manual})"
+        partes = [f"Tasa {float(c.tasa * 100):g} %", f"Base: {BASES[c.base]}", f"TC USD: {tc}",
+                  "Fuera del periodo: " + ("no suman" if c.solo_periodo else "también suman"),
+                  "Notas de crédito: " + ("se restan" if c.restar_notas_credito else "se ignoran")]
+        if c.rfc_emisor:
+            partes.append(f"Emisor: {c.rfc_emisor}")
+        ws.write(FILA_TITULO + 2, COLUMNA_INICIAL, "  ·  ".join(partes), f["parametros"])
+    return FILA_INDICADORES
 
 
-def _hoja_resumen(writer, wb, f, r: Resultado):
-    ws = wb.add_worksheet("Resumen")
-    writer.sheets["Resumen"] = ws
-    ws.set_column(0, 0, 34)
-    ws.set_column(1, 3, 22)
-    ws.write(0, 0, "Auditoría de CFDIs y contraprestación", f["titulo"])
-    ws.fit_to_pages(1, 0)
-
-    fila = 2
-    for etiqueta, valor in describir_config(r.config):
-        ws.write(fila, 0, etiqueta, f["etiqueta"])
-        ws.write(fila, 1, valor, f["texto"])
-        fila += 1
-
-    fila += 1
-    ws.merge_range(fila, 0, fila, 1, "Resultado", f["sub"])
+def _indicadores(ws, f, r: Resultado, fila: int) -> int:
     total = len(r.detalle)
-    cifras = [
-        ("Archivos procesados", total, f["entero"]),
-        ("Facturas incluidas en la base", len(r.incluidas), f["entero"]),
-        ("Facturas excluidas", total - len(r.incluidas), f["entero"]),
-        ("Base total (MXN)", r.base_mxn, f["dinero_b"]),
-        ("Contraprestación a cobrar (MXN)", r.contraprestacion, f["dinero_b"]),
-    ]
-    for etiqueta, valor, formato in cifras:
+    if r.config.calcular:
+        tarjetas = [
+            ("Facturas", total, None),
+            ("Cuentan para el cálculo", len(r.incluidas), None),
+            ("Base total MXN", r.base_mxn, "dinero"),
+            (f"Contraprestación {float(r.config.tasa * 100):g} %", r.contraprestacion, "destacado"),
+            ("Con incidencias", len(r.incidencias), None),
+        ]
+    else:
+        tarjetas = [
+            ("Facturas", total, None),
+            ("Vigentes", r.contar_estado("Vigente"), None),
+            ("Canceladas", r.contar_estado("Cancelado"), None),
+            ("No encontradas / sin verificar", r.contar_estado("No Encontrado") + r.sin_verificar,
+             None),
+            ("Emisor en EFOS", r.en_efos, None),
+        ]
+    ws.set_row(fila, 20)
+    ws.set_row(fila + 1, 30)
+    for i, (etiqueta, valor, tipo) in enumerate(tarjetas):
+        j = COLUMNA_INICIAL + 2 * i
+        if tipo == "destacado":
+            fe, fv = f["ind_etiqueta_dest"], f["ind_dinero_dest"]
+        else:
+            fe, fv = f["ind_etiqueta"], f["ind_dinero"] if tipo == "dinero" else f["ind_valor"]
+        ws.merge_range(fila, j, fila, j + 1, etiqueta, fe)
+        ws.merge_range(fila + 1, j, fila + 1, j + 1, valor, fv)
+    fila += 2
+
+    if r.config.calcular and len(r.por_periodo) > 0:
+        meses = "   ·   ".join(
+            f"{p}: {n} fact. · ${c:,.2f}"
+            for p, n, c in r.por_periodo[["Periodo", "Facturas", "Contraprestación MXN"]]
+            .itertuples(index=False))
         fila += 1
-        ws.write(fila, 0, etiqueta, f["etiqueta"])
-        ws.write(fila, 1, valor, formato)
-
+        ws.write(fila, COLUMNA_INICIAL, f"Contraprestación por mes de emisión  →  {meses}", f["nota"])
     for aviso in r.advertencias:
-        fila += 2
-        ws.merge_range(fila, 0, fila, 3, f"⚠ {aviso}", f["aviso"])
-        ws.set_row(fila, 30)
-
-    dinero = {c: f["dinero"] for c in COLUMNAS_MONEDA + COLUMNAS_MXN}
-    for titulo, df in [("Por mes de emisión (sólo incluidas)", r.por_periodo),
-                       ("Por moneda (sólo incluidas)", r.por_moneda),
-                       ("Motivos de exclusión", r.exclusiones),
-                       ("Estado ante el SAT", r.por_estado)]:
-        if df.empty:
-            continue
-        fila += 2
-        ws.write(fila, 0, titulo, f["etiqueta"])
-        fila = _escribir_tabla(ws, fila + 1, df, f, {**dinero, "Facturas": f["entero"]}) - 2
+        fila += 1
+        ws.write(fila, COLUMNA_INICIAL, f"⚠  {aviso}", f["aviso"])
+    return fila + 1
 
 
-def _hoja_tabla(writer, wb, f, nombre: str, df: pd.DataFrame, r: Resultado):
-    df = df.copy()
-    df["Fecha emisión"] = pd.to_datetime(df["Fecha emisión"])
-    ws = wb.add_worksheet(nombre)
-    writer.sheets[nombre] = ws
-    filas, cols = len(df), len(df.columns)
+def _tabla(ws, f, tabla: pd.DataFrame, columnas: list[Columna], fila: int):
+    ini = COLUMNA_INICIAL
+    fin = ini + len(columnas) - 1
+    ws.set_row(fila, 30)
+    for j, col in enumerate(columnas, ini):
+        numerica = col.tipo in ("dinero", "tc")
+        ws.write(fila, j, col.titulo, f["encabezado_num" if numerica else "encabezado"])
 
-    if filas == 0:
-        ws.write(0, 0, "Sin registros", f["texto"])
+    primera = fila + 1
+    for i, registro in enumerate(tabla.itertuples(index=False), primera):
+        ws.set_row(i, 18)
+        for j, (col, valor) in enumerate(zip(columnas, registro), ini):
+            if valor is None or (not isinstance(valor, str) and pd.isna(valor)):
+                ws.write_blank(i, j, None, f["texto"])
+            elif col.tipo == "liga":
+                if valor:
+                    ws.write_url(i, j, valor, f["liga"], string="Abrir")
+                else:
+                    ws.write_blank(i, j, None, f["texto"])
+            elif col.tipo == "fecha":
+                ws.write_datetime(i, j, valor.to_pydatetime(), f["fecha"])
+            else:
+                ws.write(i, j, valor, f[col.tipo if col.tipo in f else "texto"])
+    ultima = primera + len(tabla) - 1
+
+    if len(tabla) == 0:
+        ws.write(primera, ini, "No se encontraron facturas en los archivos.", f["nota"])
         return
 
-    columnas = []
-    for col in df.columns:
-        spec = {"header": col, "header_format": f["encabezado"]}
-        if col in COLUMNAS_MONEDA + COLUMNAS_MXN:
-            spec["format"] = f["dinero"]
-        elif col == "Tipo de cambio":
-            spec["format"] = f["tc"]
-        elif col == "Fecha emisión":
-            spec["format"] = f["fecha"]
-        if col in COLUMNAS_MXN:
-            spec["total_function"] = "sum"
-        columnas.append(spec)
-    columnas[0]["total_string"] = "Total (filtrado)"
-    ws.add_table(0, 0, filas + 1, cols - 1, {
-        "data": df.astype(object).where(df.notna(), None).values.tolist(),
-        "columns": columnas, "total_row": True, "style": "Table Style Light 9",
-        "name": f"Tabla{nombre}",
-    })
+    # Totales que respetan los filtros de Excel (SUBTOTAL 109 ignora filas ocultas).
+    fila_total = ultima + 1
+    ws.write(fila_total, ini, "Total visible", f["total_etiqueta"])
+    for j, col in enumerate(columnas, ini):
+        if j == ini:
+            continue
+        if col.total:
+            letra = _letra(j)
+            ws.write_formula(fila_total, j, f"=SUBTOTAL(109,{letra}{primera + 1}:{letra}{ultima + 1})",
+                             f["total"], float(tabla[col.titulo].fillna(0).sum()))
+        else:
+            ws.write_blank(fila_total, j, None, f["total_etiqueta"])
 
-    # Ligas al verificador del SAT como hipervínculos reales.
-    j_liga = df.columns.get_loc("Verificar en SAT")
-    for i, url in enumerate(df["Verificar en SAT"], 1):
-        if url:
-            ws.write_url(i, j_liga, url, string="Abrir")
+    rango = f"{_letra(ini)}{primera + 1}:{_letra(fin)}{ultima + 1}"
+    estado = f"${_letra(ini)}{primera + 1}"
+    titulos = [c.titulo for c in columnas]
+    col_estado = f"{_letra(ini)}{primera + 1}:{_letra(ini)}{ultima + 1}"
+    for valor, formato in (("Vigente", "vigente"), ("Cancelado", "cancelado")):
+        ws.conditional_format(col_estado, {"type": "formula", "criteria": f'={estado}="{valor}"',
+                                           "format": f[formato]})
+    ws.conditional_format(col_estado, {"type": "formula",
+                                       "criteria": f'=AND({estado}<>"Vigente",{estado}<>"Cancelado")',
+                                       "format": f["pendiente"]})
+    if "¿Cuenta?" in titulos:
+        cuenta = f"${_letra(ini + titulos.index('¿Cuenta?'))}{primera + 1}"
+        ws.conditional_format(rango, {"type": "formula", "criteria": f'={cuenta}="No"',
+                                      "format": f["no_cuenta"]})
+    if "EFOS" in titulos:
+        j = ini + titulos.index("EFOS")
+        ws.conditional_format(primera, j, ultima, j, {"type": "cell", "criteria": "==",
+                                                       "value": '"Sí"', "format": f["efos"]})
 
-    for j, col in enumerate(df.columns):
-        ws.set_column(j, j, ANCHOS.get(col, 14))
-
-    letra = lambda col: _letra(df.columns.get_loc(col))  # noqa: E731
-    rango = f"A2:{_letra(cols - 1)}{filas + 1}"
-    ws.conditional_format(rango, {"type": "formula", "format": f["cancelada"],
-                                  "criteria": f'=${letra("Estado SAT")}2="Cancelado"'})
-    ws.conditional_format(rango, {"type": "formula", "format": f["efos"],
-                                  "criteria": f'=${letra("Emisor en EFOS")}2="Sí"'})
-    ws.conditional_format(rango, {"type": "formula", "format": f["excluida"],
-                                  "criteria": f'=${letra("¿Incluida?")}2="No"'})
-    ws.freeze_panes(1, 2)
-    ws.set_row(0, 30)
+    ws.autofilter(fila, ini, ultima, fin)
+    ws.freeze_panes(fila + 1, ini + 1)
     ws.set_landscape()
+    ws.set_paper(1)
     ws.fit_to_pages(1, 0)
-    ws.repeat_rows(0)
+    ws.repeat_rows(fila)
+    ws.set_margins(left=0.4, right=0.4, top=0.5, bottom=0.5)
 
 
 def _letra(indice: int) -> str:
