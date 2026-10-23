@@ -10,11 +10,12 @@ from typing import Callable, Iterable
 import pandas as pd
 
 from . import sat
-from .lector import CFDI, expandir_archivos, leer_cfdi
+from .lector import CFDI, Concepto, expandir_archivos, leer_cfdi
 from .tipo_cambio import ErrorTipoCambio, TablaFIX, descargar_fix
 
 CENTAVO = Decimal("0.01")
 MAX_DESCRIPCION = 2000  # Excel no acepta celdas de más de 32,767 caracteres
+MAX_LINEAS_CONCEPTOS = 25
 
 TIPOS = {"I": "Ingreso", "E": "Egreso (nota de crédito)", "P": "Pago",
          "T": "Traslado", "N": "Nómina"}
@@ -61,6 +62,7 @@ class Resultado:
     por_moneda: pd.DataFrame
     exclusiones: pd.DataFrame
     advertencias: list[str] = field(default_factory=list)
+    conceptos: pd.DataFrame = field(default_factory=pd.DataFrame)  # una fila por concepto
 
     @property
     def incluidas(self) -> pd.DataFrame:
@@ -92,6 +94,11 @@ class Resultado:
     @property
     def base_mxn(self) -> float:
         return float(self.incluidas["Base MXN"].sum())
+
+    @property
+    def total_vigente_mxn(self) -> float:
+        d = self.detalle
+        return float(d.loc[d["Estado SAT"] == "Vigente", "Total MXN"].sum())
 
     @property
     def contraprestacion(self) -> float:
@@ -164,14 +171,71 @@ def auditar(cfdis: list[CFDI], config: Configuracion, al_avanzar: Progreso | Non
                 except ErrorTipoCambio as e:
                     advertencias.append(f"{e} Se usó el tipo de cambio de cada CFDI.")
 
-    filas = []
+    filas, conceptos = [], []
     for i, c in enumerate(cfdis):
         estado = estados.get(c.uuid) if c.uuid and i not in duplicado_de else None
-        filas.append(_fila(c, config, estado, duplicado_de.get(i), tabla_fix))
+        fila = _fila(c, config, estado, duplicado_de.get(i), tabla_fix)
+        filas.append(fila)
+        if not c.error and i not in duplicado_de:
+            conceptos.extend(_filas_conceptos(c, fila))
         avanzar("Calculando", i + 1, len(cfdis))
 
     detalle = pd.DataFrame(filas, columns=list(_fila_vacia().keys()))
-    return _resumir(config, detalle, advertencias)
+    resultado = _resumir(config, detalle, advertencias)
+    resultado.conceptos = pd.DataFrame(conceptos, columns=COLUMNAS_CONCEPTOS)
+    return resultado
+
+
+COLUMNAS_CONCEPTOS = [
+    "Estado SAT", "¿Cuenta?", "Fecha", "Serie y folio", "RFC emisor", "Emisor", "Receptor",
+    "Clave SAT", "No. identificación", "Descripción", "Cantidad", "Unidad", "Valor unitario",
+    "Importe", "Descuento", "Moneda", "Tipo de cambio", "Importe neto MXN", "UUID", "Archivo",
+]
+
+
+def _cantidad(valor: Decimal | None) -> str:
+    return format(valor.normalize(), "f") if valor is not None else ""
+
+
+def _linea_concepto(k: Concepto, moneda: str) -> str:
+    unidad = k.unidad or k.clave_unidad or ""
+    detalle = f"{_cantidad(k.cantidad)} {unidad}".strip()
+    if k.valor_unitario is not None:
+        detalle += f" × {k.valor_unitario:,.2f}"
+    linea = f"• {k.descripcion or 'Sin descripción'} — {detalle} = {k.importe:,.2f} {moneda}"
+    if k.descuento:
+        linea += f" (desc. {k.descuento:,.2f})"
+    if k.clave_prod_serv:
+        linea += f" · clave {k.clave_prod_serv}"
+    return linea
+
+
+def _texto_conceptos(c: CFDI) -> str:
+    lineas = [_linea_concepto(k, c.moneda or "") for k in c.conceptos[:MAX_LINEAS_CONCEPTOS]]
+    if len(c.conceptos) > MAX_LINEAS_CONCEPTOS:
+        lineas.append(f"… y {len(c.conceptos) - MAX_LINEAS_CONCEPTOS} concepto(s) más")
+    texto = "\n".join(lineas)
+    return texto if len(texto) <= MAX_DESCRIPCION else texto[:MAX_DESCRIPCION] + "…"
+
+
+def _filas_conceptos(c: CFDI, fila: dict) -> list[dict]:
+    tc = fila["Tipo de cambio"]
+    signo = -1 if c.tipo == "E" else 1
+    serie_folio = "-".join(p for p in (c.serie, c.folio) if p)
+    return [{
+        "Estado SAT": fila["Estado SAT"], "¿Cuenta?": fila["¿Incluida?"], "Fecha": c.fecha,
+        "Serie y folio": serie_folio, "RFC emisor": c.rfc_emisor or "",
+        "Emisor": c.nombre_emisor or "", "Receptor": c.nombre_receptor or "",
+        "Clave SAT": k.clave_prod_serv or "", "No. identificación": k.no_identificacion or "",
+        "Descripción": k.descripcion, "Cantidad": float(k.cantidad) if k.cantidad is not None else None,
+        "Unidad": k.unidad or k.clave_unidad or "",
+        "Valor unitario": float(k.valor_unitario) if k.valor_unitario is not None else None,
+        "Importe": float(k.importe), "Descuento": float(k.descuento), "Moneda": c.moneda or "",
+        "Tipo de cambio": tc,
+        "Importe neto MXN": (float(_redondear((k.importe - k.descuento) * Decimal(str(tc)) * signo))
+                             if tc is not None else None),
+        "UUID": c.uuid, "Archivo": c.archivo,
+    } for k in c.conceptos]
 
 
 def _es_relevante(c: CFDI, config: Configuracion) -> bool:
@@ -201,12 +265,14 @@ def _fila_vacia() -> dict:
         "RFC emisor": "", "Nombre emisor": "", "RFC receptor": "", "Nombre receptor": "",
         "Moneda": "", "Subtotal": None, "Descuento": None, "Total": None,
         "Base moneda original": None, "Tipo de cambio": None, "Fuente TC": "",
+        "Subtotal MXN": None, "Total MXN": None,
         "Base MXN": None, "Contraprestación MXN": None,
         "¿Incluida?": "No", "Motivo de exclusión": "",
         "Estado SAT": "", "Código SAT": "", "Estatus cancelación": "", "Es cancelable": "",
         "Emisor en EFOS": "",
         "Método de pago": "", "Uso CFDI": "", "CFDI relacionados": "",
-        "Descripción": "", "Observaciones": "", "Verificar en SAT": "",
+        "Descripción": "", "Conceptos": "", "Núm. conceptos": 0,
+        "Observaciones": "", "Verificar en SAT": "",
     }
 
 
@@ -249,6 +315,7 @@ def _fila(c: CFDI, config: Configuracion, estado: sat.EstadoSAT | None,
         "Descripción": c.descripcion if len(c.descripcion) <= MAX_DESCRIPCION
                        else c.descripcion[:MAX_DESCRIPCION] + "…",
         "Verificar en SAT": sat.liga_verificador(c),
+        "Conceptos": _texto_conceptos(c), "Núm. conceptos": len(c.conceptos),
     })
 
     if estado is not None:
@@ -273,6 +340,11 @@ def _fila(c: CFDI, config: Configuracion, estado: sat.EstadoSAT | None,
     fila["Fuente TC"] = fuente
     base_mxn = _redondear(base * tc) if tc is not None else None
     fila["Base MXN"] = float(base_mxn) if base_mxn is not None else None
+    if tc is not None and not duplicado_de:
+        # Importes en pesos (las notas de crédito en negativo) para sumar en ambos modos.
+        signo_importe = -1 if c.tipo == "E" else 1
+        fila["Subtotal MXN"] = float(_redondear(c.subtotal * tc * signo_importe))
+        fila["Total MXN"] = float(_redondear(c.total * tc * signo_importe))
     if config.calcular and signo and c.moneda not in ("MXN", "USD"):
         obs.append(f"Moneda {c.moneda_original or c.moneda}: revisar tipo de cambio")
     if config.calcular and c.tipo == "I" and c.metodo_pago == "PPD":

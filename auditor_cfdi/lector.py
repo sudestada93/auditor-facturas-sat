@@ -28,6 +28,19 @@ _ALIAS_MONEDA = {
 
 
 @dataclass
+class Concepto:
+    descripcion: str
+    clave_prod_serv: str | None = None
+    no_identificacion: str | None = None
+    cantidad: Decimal | None = None
+    clave_unidad: str | None = None
+    unidad: str | None = None
+    valor_unitario: Decimal | None = None
+    importe: Decimal = Decimal("0")
+    descuento: Decimal = Decimal("0")
+
+
+@dataclass
 class CFDI:
     archivo: str
     error: str | None = None
@@ -56,6 +69,7 @@ class CFDI:
     sello_ultimos8: str = ""
     descripcion: str = ""
     relacionados: list[str] = field(default_factory=list)  # "TipoRelacion:UUID"
+    conceptos: list[Concepto] = field(default_factory=list)
 
     @property
     def subtotal_neto(self) -> Decimal:
@@ -150,12 +164,19 @@ def leer_cfdi(contenido: bytes, archivo: str) -> CFDI:
             cfdi.nombre_receptor = _attr(hijo, "Nombre")
             cfdi.uso_cfdi = _attr(hijo, "UsoCFDI")
         elif nombre == "Conceptos":
-            descripciones = []
             for concepto in _hijos(hijo, "Concepto"):
-                d = _attr(concepto, "Descripcion")
-                if d:
-                    descripciones.append(" ".join(d.split()))
-            cfdi.descripcion = " | ".join(descripciones)
+                cfdi.conceptos.append(Concepto(
+                    descripcion=" ".join((_attr(concepto, "Descripcion") or "").split()),
+                    clave_prod_serv=_attr(concepto, "ClaveProdServ"),
+                    no_identificacion=_attr(concepto, "NoIdentificacion"),
+                    cantidad=_decimal(_attr(concepto, "Cantidad")),
+                    clave_unidad=_attr(concepto, "ClaveUnidad"),
+                    unidad=_attr(concepto, "Unidad"),
+                    valor_unitario=_decimal(_attr(concepto, "ValorUnitario")),
+                    importe=_decimal(_attr(concepto, "Importe")) or Decimal("0"),
+                    descuento=_decimal(_attr(concepto, "Descuento")) or Decimal("0"),
+                ))
+            cfdi.descripcion = " | ".join(c.descripcion for c in cfdi.conceptos if c.descripcion)
         elif nombre == "Impuestos":
             cfdi.impuestos_trasladados = _decimal(_attr(hijo, "TotalImpuestosTrasladados"))
             cfdi.impuestos_retenidos = _decimal(_attr(hijo, "TotalImpuestosRetenidos"))

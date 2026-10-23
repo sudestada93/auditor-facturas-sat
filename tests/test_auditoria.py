@@ -4,6 +4,7 @@ from decimal import Decimal
 from unittest import mock
 
 import openpyxl
+import pandas as pd
 import pytest
 
 from auditor_cfdi import Configuracion, auditar_archivos, generar_excel
@@ -202,3 +203,33 @@ def test_excel_sin_facturas():
     r = auditar_archivos([], Configuracion(**ENERO))
     _, filas, enc = _hoja(r)
     assert filas[enc + 1][1] == "No se encontraron facturas en los archivos."
+
+
+def test_modo_verificacion_tambien_suma(lote):
+    consultor = _estados(**{_uuid(6): EstadoSAT("Cancelado", "S - OK")})
+    r = auditar_archivos(lote, Configuracion(**ENERO, calcular=False), consultor_sat=consultor)
+    assert _fila(r, "usd.xml")["Total MXN"] == 232 * 17.5
+    assert _fila(r, "nota.xml")["Total MXN"] == -58.0
+    assert pd.isna(_fila(r, "copia.xml")["Total MXN"])        # duplicado no suma
+    # vigentes: mxn 1044 + usd 4060 + nota -58 + pago 0 + febrero 1160
+    assert r.total_vigente_mxn == pytest.approx(1044 + 4060 - 58 + 0 + 1160)
+    ws, filas, enc = _hoja(r)
+    j = filas[enc].index("Total MXN")
+    assert "SUBTOTAL(109" in str(filas[-1][j])
+    assert any(r.total_vigente_mxn in f for f in filas[enc - 5:enc])
+
+
+def test_conceptos_detallados():
+    xml = cfdi40(subtotal="1000.00", conceptos=("Maniobras de carga", "Almacenaje"))
+    r = auditar_archivos([("a.xml", xml)], Configuracion(**ENERO), consultor_sat=_estados())
+    texto = _fila(r, "a.xml")["Conceptos"]
+    assert texto.splitlines() == [
+        "• Maniobras de carga — 2 Servicio × 250.00 = 500.00 MXN · clave 78101800",
+        "• Almacenaje — 2 Servicio × 250.00 = 500.00 MXN · clave 78101800",
+    ]
+    assert r.conceptos["Descripción"].tolist() == ["Maniobras de carga", "Almacenaje"]
+    assert r.conceptos["Importe neto MXN"].sum() == 1000.0
+    ws, filas, enc = _hoja(r)
+    j = filas[enc].index("Conceptos")
+    assert filas[enc + 1][j] == texto
+    assert ws.row_dimensions[enc + 2].height > 18  # fila más alta para los dos renglones

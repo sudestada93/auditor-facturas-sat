@@ -45,13 +45,15 @@ st.html("""
   [class*="st-key-tarjeta"] { border-radius: 16px !important; padding: 1.5rem 1.75rem !important;
       box-shadow: rgba(0,0,0,.04) 0 1px 3px, rgba(0,0,0,.03) 0 8px 16px; }
 
-  .metricas { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  .metricas { display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
               gap: 12px; margin: .5rem 0 1rem; }
+  @media (max-width: 760px) { .metricas { grid-template-columns: repeat(2, 1fr); } }
   .metrica { border: 1px solid var(--niebla); border-radius: 16px; padding: 14px 16px; background: #fff; }
   .metrica .etq { font-size: 12px; color: var(--ceniza); letter-spacing: -.2px; }
   .metrica .val { font-size: 24px; font-weight: 600; letter-spacing: -.8px; color: var(--carbon);
                   margin-top: 2px; white-space: nowrap; }
-  .metrica.destacada { background: var(--menta-fondo); border-color: var(--menta-fondo); }
+  .metrica.destacada { background: var(--menta-fondo); border-color: var(--menta-fondo);
+                       grid-column: span 2; }
   .metrica.destacada .etq { color: var(--menta); font-weight: 600; }
   .seccion { font-size: 28px; font-weight: 600; letter-spacing: -.8px; color: var(--carbon);
              margin: 2.5rem 0 .25rem; }
@@ -81,7 +83,8 @@ def _metricas(tarjetas: list[tuple[str, str, bool]]):
     celdas = "".join(
         f'<div class="metrica{" destacada" if dest else ""}"><div class="etq">{escape(etq)}</div>'
         f'<div class="val">{escape(val)}</div></div>' for etq, val, dest in tarjetas)
-    st.html(f'<div class="metricas">{celdas}</div>')
+    columnas = len(tarjetas) + sum(dest for *_, dest in tarjetas)  # la destacada ocupa 2
+    st.html(f'<div class="metricas" style="--cols:{columnas}">{celdas}</div>')
 
 
 def _pesos(valor: float) -> str:
@@ -220,11 +223,12 @@ if rc.calcular:
 else:
     _metricas([
         ("Facturas", f"{len(det):,}", False),
-        ("Vigentes", f"{resultado.contar_estado('Vigente'):,}", True),
+        ("Vigentes", f"{resultado.contar_estado('Vigente'):,}", False),
         ("Canceladas", f"{resultado.contar_estado('Cancelado'):,}", False),
         ("No confirmadas",
          f"{resultado.contar_estado('No Encontrado') + resultado.sin_verificar:,}", False),
         ("Emisor en EFOS", f"{resultado.en_efos:,}", False),
+        ("Total vigente MXN", _pesos(resultado.total_vigente_mxn), True),
     ])
 
 for aviso in resultado.advertencias:
@@ -232,49 +236,109 @@ for aviso in resultado.advertencias:
 
 nombre = f"Auditoria_{rc.fecha_inicio}_al_{rc.fecha_fin}"
 tabla = tabla_reporte(resultado)
-d1, d2, _ = st.columns([1.2, 1, 3])
+conceptos = resultado.conceptos
+d1, d2, d3, _ = st.columns([1.2, 1, 1.2, 1.6])
 d1.download_button("Descargar Excel", st.session_state["excel"], f"{nombre}.xlsx",
                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                    type="primary", icon=":material/download:", width="stretch")
-d2.download_button("Descargar CSV", tabla.to_csv(index=False).encode("utf-8-sig"),
+d2.download_button("CSV facturas", tabla.to_csv(index=False).encode("utf-8-sig"),
                    f"{nombre}.csv", "text/csv", width="stretch")
+d3.download_button("CSV conceptos", conceptos.to_csv(index=False).encode("utf-8-sig"),
+                   f"{nombre}_conceptos.csv", "text/csv", width="stretch")
 
 COLORES_ESTADO = {"Vigente": "color:#1E9E46;background-color:#DEF6E4;font-weight:600",
                   "Cancelado": "color:#C62828;background-color:#FDE7E7;font-weight:600"}
-
-
-MONTOS = ["Subtotal", "Total", "Base MXN", "Contraprestación"]
+MONTOS = ["Subtotal", "Total", "Subtotal MXN", "Total MXN", "Base MXN", "Contraprestación",
+          "Valor unitario", "Importe", "Descuento", "Importe neto MXN", "Importe MXN"]
 
 
 def _texto(valor, patron: str) -> str:
     return "" if valor is None or valor != valor else patron.format(valor)
 
 
-def _mostrar(df):
-    # Se muestra como texto ya formateado para que las celdas vacías no digan "None".
+def _ordenar(df, primero: list[str], quitar: tuple[str, ...] = ()):
+    """Pone primero las columnas clave para el análisis (sin perder las demás)."""
+    primero = [c for c in primero if c in df.columns]
+    resto = [c for c in df.columns if c not in primero and c not in quitar]
+    return df[primero + resto]
+
+
+ORDEN_FACTURAS = ["Estado SAT", "¿Cuenta?", "EFOS", "Fecha", "Serie y folio", "Emisor",
+                  "Conceptos", "Moneda", "Subtotal", "Total", "Tipo de cambio", "Subtotal MXN",
+                  "Total MXN", "Base MXN", "Contraprestación", "Notas"]
+ORDEN_CONCEPTOS = ["Estado SAT", "¿Cuenta?", "Fecha", "Serie y folio", "Emisor", "Descripción",
+                   "Clave SAT", "Cantidad", "Unidad", "Valor unitario", "Importe", "Descuento",
+                   "Moneda", "Importe neto MXN"]
+SIN_CUENTA = () if rc.calcular else ("¿Cuenta?",)
+
+
+def _resumen_conceptos(texto: str) -> str:
+    """Primer concepto (sin el detalle) y cuántos más trae la factura."""
+    lineas = [l for l in texto.split("\n") if l]
+    if not lineas:
+        return ""
+    primero = lineas[0].removeprefix("• ").split(" — ")[0]
+    return primero + (f"  (+{len(lineas) - 1} más)" if len(lineas) > 1 else "")
+
+
+def _mostrar(df, clave: str | None = None):
+    """Tabla con formato. Si se da `clave`, permite seleccionar una fila."""
     df = df.copy()
-    numericas = [c for c in MONTOS + ["Tipo de cambio"] if c in df.columns]
+    numericas = [c for c in MONTOS + ["Tipo de cambio", "Cantidad"] if c in df.columns]
     for col in numericas:
-        df[col] = df[col].map(lambda v, p="{:.4f}" if col == "Tipo de cambio" else "{:,.2f}":
-                              _texto(v, p))
-    df["Fecha"] = df["Fecha"].map(lambda v: _texto(v, "{:%d/%m/%Y}"))
-    estilo = df.style.map(
-        lambda v: COLORES_ESTADO.get(v, "color:#9A6400;background-color:#FFF2D6;font-weight:600"),
-        subset=["Estado SAT"])
+        patron = {"Tipo de cambio": "{:.4f}", "Cantidad": "{:,.6g}"}.get(col, "{:,.2f}")
+        df[col] = df[col].map(lambda v, p=patron: _texto(v, p))
+    if "Fecha" in df:
+        df["Fecha"] = df["Fecha"].map(lambda v: _texto(v, "{:%d/%m/%Y}"))
+    if "Conceptos" in df:
+        df["Conceptos"] = df["Conceptos"].map(_resumen_conceptos)
+    estilo = df.style
+    if "Estado SAT" in df:
+        estilo = estilo.map(
+            lambda v: COLORES_ESTADO.get(v, "color:#9A6400;background-color:#FFF2D6;font-weight:600"),
+            subset=["Estado SAT"])
     if "¿Cuenta?" in df.columns:
         estilo = estilo.map(lambda v: "color:#999999" if v == "No" else "", subset=["¿Cuenta?"])
-    st.dataframe(estilo, hide_index=True, height=min(540, 35 * (len(df) + 1) + 3),
-                 column_config={
-                     **{c: st.column_config.TextColumn(alignment="right") for c in numericas},
-                     "Notas": st.column_config.TextColumn(width="large"),
-                     "SAT": st.column_config.LinkColumn(display_text="Abrir"),
-                 })
+    seleccion = {"on_select": "rerun", "selection_mode": "single-row", "key": clave} if clave else {}
+    return st.dataframe(
+        estilo, hide_index=True, height=min(540, 35 * (len(df) + 1) + 3),
+        column_config={
+            **{c: st.column_config.TextColumn(alignment="right") for c in numericas},
+            "Conceptos": st.column_config.TextColumn(width="large"),
+            "Descripción": st.column_config.TextColumn(width="large"),
+            "Notas": st.column_config.TextColumn(width="large"),
+            "SAT": st.column_config.LinkColumn(display_text="Abrir"),
+        }, **seleccion)
 
 
-pestanas = ["Facturas", f"Incidencias ({len(resultado.incidencias)})"]
+def _desglose(vista, evento):
+    """Conceptos de la factura seleccionada en la tabla."""
+    filas = evento.selection.rows if evento else []
+    if not filas:
+        st.caption("Haz clic en el recuadro a la izquierda de una factura para ver todos sus conceptos.")
+        return
+    factura = vista.iloc[filas[0]]
+    propios = conceptos[(conceptos["UUID"] == factura["UUID"]) &
+                        (conceptos["Archivo"] == factura["Archivo"])]
+    with st.container(border=True, key="tarjeta-desglose"):
+        st.markdown(f"**Conceptos de la factura {factura['Serie y folio'] or factura['UUID']}** · "
+                    f"{factura['Emisor']} · {factura['Fecha']:%d/%m/%Y}"
+                    if factura["Fecha"] == factura["Fecha"] else
+                    f"**Conceptos de la factura {factura['UUID']}**")
+        if propios.empty:
+            st.write("Esta factura no tiene conceptos legibles.")
+            return
+        _mostrar(propios[["Clave SAT", "No. identificación", "Descripción", "Cantidad", "Unidad",
+                          "Valor unitario", "Importe", "Descuento", "Moneda", "Importe neto MXN"]])
+        st.caption(f"{len(propios)} concepto(s) · importe neto "
+                   f"{_pesos(propios['Importe neto MXN'].sum())} MXN")
+
+
+pestanas = ["Facturas", f"Conceptos ({len(conceptos)})",
+            f"Incidencias ({len(resultado.incidencias)})"]
 if rc.calcular:
     pestanas.append("Por mes")
-t_facturas, t_incid, *t_mes = st.tabs(pestanas)
+t_facturas, t_conceptos, t_incid, *t_mes = st.tabs(pestanas)
 
 with t_facturas:
     f1, f2 = st.columns([2, 1.3])
@@ -285,15 +349,46 @@ with t_facturas:
     vista = tabla
     if buscar:
         texto = vista[["UUID", "RFC emisor", "Emisor", "RFC receptor", "Receptor",
-                       "Serie y folio", "Concepto", "Archivo"]].astype(str).agg(" ".join, axis=1)
+                       "Serie y folio", "Conceptos", "Archivo"]].astype(str).agg(" ".join, axis=1)
         vista = vista[texto.str.contains(buscar, case=False, regex=False)]
     if filtro:
         vista = vista[vista["Estado SAT"].isin(filtro)]
     resumen = f"{len(vista)} de {len(tabla)} facturas"
     if rc.calcular:
         resumen += f" · contraprestación visible {_pesos(vista['Contraprestación'].sum())}"
+    else:
+        resumen += f" · total visible {_pesos(vista['Total MXN'].sum())} MXN"
     st.caption(resumen)
-    _mostrar(vista)
+    vista = _ordenar(vista, ORDEN_FACTURAS)
+    _desglose(vista, _mostrar(vista, "tabla-facturas"))
+
+with t_conceptos:
+    if conceptos.empty:
+        st.write("No se encontraron conceptos en las facturas.")
+    else:
+        cuentan = (conceptos["¿Cuenta?"] == "Sí") if rc.calcular else \
+            (conceptos["Estado SAT"] == "Vigente")
+        agrupado = (conceptos[cuentan]
+                    .groupby(["Descripción", "Clave SAT"], as_index=False)
+                    .agg(Facturas=("UUID", "nunique"), Cantidad=("Cantidad", "sum"),
+                         **{"Importe MXN": ("Importe neto MXN", "sum")})
+                    .sort_values("Importe MXN", ascending=False))
+        st.markdown("**Resumen por concepto**")
+        st.caption("Sólo facturas que " + ("cuentan para el cálculo." if rc.calcular
+                                            else "están vigentes ante el SAT.")
+                   + " Las notas de crédito restan.")
+        _mostrar(agrupado)
+        st.markdown("**Todos los conceptos**")
+        buscar_c = st.text_input("Buscar concepto", placeholder="Descripción, clave SAT, emisor…",
+                                 label_visibility="collapsed")
+        vista_c = conceptos
+        if buscar_c:
+            texto = vista_c[["Descripción", "Clave SAT", "No. identificación", "Emisor",
+                             "RFC emisor", "Serie y folio", "UUID"]].astype(str).agg(" ".join, axis=1)
+            vista_c = vista_c[texto.str.contains(buscar_c, case=False, regex=False)]
+        st.caption(f"{len(vista_c)} de {len(conceptos)} conceptos · importe neto visible "
+                   f"{_pesos(vista_c['Importe neto MXN'].sum())} MXN")
+        _mostrar(_ordenar(vista_c, ORDEN_CONCEPTOS, SIN_CUENTA))
 
 with t_incid:
     incid = tabla.loc[resultado.incidencias.index]
@@ -301,7 +396,7 @@ with t_incid:
         st.success("Sin incidencias: todo está en orden.", icon=":material/check_circle:")
     else:
         st.caption("Facturas que no cuentan, no están vigentes o tienen alguna observación.")
-        _mostrar(incid)
+        _mostrar(_ordenar(incid, ORDEN_FACTURAS))
 
 if t_mes:
     with t_mes[0]:
