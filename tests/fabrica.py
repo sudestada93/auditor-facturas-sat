@@ -18,7 +18,11 @@ def cfdi40(uuid="AAAAAAAA-1111-2222-3333-444444444444", tipo="I", fecha="2026-01
         rel = ('<cfdi:CfdiRelacionados TipoRelacion="01">'
                + "".join(f'<cfdi:CfdiRelacionado UUID="{u}"/>' for u in relacionados)
                + "</cfdi:CfdiRelacionados>")
-    conc = "".join(f'<cfdi:Concepto Descripcion="{d}" Importe="1"/>' for d in conceptos)
+    importe = float(subtotal) / max(len(conceptos), 1)
+    conc = "".join(
+        f'<cfdi:Concepto ClaveProdServ="78101800" Cantidad="2" ClaveUnidad="E48" '
+        f'Unidad="Servicio" Descripcion="{d}" ValorUnitario="{importe / 2:.2f}" '
+        f'Importe="{importe:.2f}"/>' for d in conceptos)
     xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4"
     xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" {' '.join(attrs)}>

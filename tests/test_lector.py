@@ -77,3 +77,12 @@ def test_expandir_zip_anidado():
 def test_zip_danado():
     [(nombre, datos)] = list(expandir_archivos([("roto.zip", b"no es zip")]))
     assert nombre == "roto.zip" and datos == b""
+
+
+def test_detalle_de_conceptos():
+    c = leer_cfdi(cfdi40(subtotal="1000.00", conceptos=("Maniobras", "Almacenaje")), "a.xml")
+    assert [k.descripcion for k in c.conceptos] == ["Maniobras", "Almacenaje"]
+    k = c.conceptos[0]
+    assert k.clave_prod_serv == "78101800" and k.cantidad == Decimal("2")
+    assert k.unidad == "Servicio" and k.valor_unitario == Decimal("250.00")
+    assert k.importe == Decimal("500.00")

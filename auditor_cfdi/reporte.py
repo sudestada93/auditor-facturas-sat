@@ -39,8 +39,8 @@ COLUMNAS_CALCULO = [
     Columna("Tipo", 12), Columna("Moneda", 9),
     Columna("Subtotal", 14, "dinero"), Columna("Total", 14, "dinero"),
     Columna("Tipo de cambio", 12, "tc"), Columna("Base MXN", 16, "dinero", True),
-    Columna("Contraprestación", 17, "dinero", True), Columna("Notas", 42),
-    Columna("Concepto", 40), Columna("UUID", 38), Columna("SAT", 9, "liga"),
+    Columna("Contraprestación", 17, "dinero", True), Columna("Conceptos", 85, "conceptos"),
+    Columna("Notas", 40), Columna("UUID", 38), Columna("SAT", 9, "liga"),
     Columna("Archivo", 30),
 ]
 
@@ -50,9 +50,11 @@ COLUMNAS_VERIFICACION = [
     Columna("RFC emisor", 15), Columna("Emisor", 30),
     Columna("RFC receptor", 15), Columna("Receptor", 30),
     Columna("Tipo", 12), Columna("Moneda", 9),
-    Columna("Total", 14, "dinero"), Columna("Estatus cancelación", 20),
-    Columna("Notas", 42), Columna("Concepto", 40), Columna("UUID", 38),
-    Columna("SAT", 9, "liga"), Columna("Archivo", 30),
+    Columna("Total", 14, "dinero"), Columna("Tipo de cambio", 12, "tc"),
+    Columna("Subtotal MXN", 16, "dinero", True), Columna("Total MXN", 16, "dinero", True),
+    Columna("Conceptos", 85, "conceptos"), Columna("Estatus cancelación", 20),
+    Columna("Notas", 40), Columna("UUID", 38), Columna("SAT", 9, "liga"),
+    Columna("Archivo", 30),
 ]
 
 
@@ -78,11 +80,12 @@ def tabla_reporte(resultado: Resultado) -> pd.DataFrame:
                                                                  regex=False),
         "Moneda": d["Moneda"], "Subtotal": d["Subtotal"], "Total": d["Total"],
         "Tipo de cambio": d["Tipo de cambio"],
+        "Subtotal MXN": d["Subtotal MXN"], "Total MXN": d["Total MXN"],
         # Las que no cuentan se dejan en blanco para que los totales cuadren.
         "Base MXN": d["Base MXN"].where(d["¿Incluida?"] == "Sí"),
         "Contraprestación": d["Contraprestación MXN"].where(d["¿Incluida?"] == "Sí"),
         "Estatus cancelación": d["Estatus cancelación"],
-        "Notas": notas, "Concepto": d["Descripción"], "UUID": d["UUID"],
+        "Notas": notas, "Conceptos": d["Conceptos"], "UUID": d["UUID"],
         "SAT": d["Verificar en SAT"], "Archivo": d["Archivo"],
     })
     columnas = COLUMNAS_CALCULO if calcular else COLUMNAS_VERIFICACION
@@ -115,7 +118,7 @@ def _formatos(wb) -> dict:
         return wb.add_format({"font_name": FUENTE, "font_size": 10, "font_color": CARBON,
                               "valign": "vcenter", **kw})
 
-    celda = dict(bottom=1, bottom_color=NIEBLA)
+    celda = dict(bottom=1, bottom_color=NIEBLA, valign="top")
     return {
         "titulo": fmt(font_size=20, bold=True),
         "subtitulo": fmt(font_color=GRAFITO, font_size=11),
@@ -143,6 +146,7 @@ def _formatos(wb) -> dict:
         "dinero": fmt(**celda, num_format="#,##0.00"),
         "tc": fmt(**celda, num_format="#,##0.0000"),
         "fecha": fmt(**celda, num_format="dd/mm/yyyy", align="left", indent=1),
+        "conceptos": fmt(**celda, indent=1, text_wrap=True),
         "liga": fmt(**celda, font_color=CIELO, underline=1, indent=1),
         "estado": fmt(**celda, bold=True, indent=1),
         "total_etiqueta": fmt(bold=True, top=1, top_color=CARBON),
@@ -190,9 +194,10 @@ def _indicadores(ws, f, r: Resultado, fila: int) -> int:
             ("Facturas", total, None),
             ("Vigentes", r.contar_estado("Vigente"), None),
             ("Canceladas", r.contar_estado("Cancelado"), None),
-            ("No encontradas / sin verificar", r.contar_estado("No Encontrado") + r.sin_verificar,
+            ("No confirmadas", r.contar_estado("No Encontrado") + r.sin_verificar,
              None),
             ("Emisor en EFOS", r.en_efos, None),
+            ("Total vigente MXN", r.total_vigente_mxn, "destacado"),
         ]
     ws.set_row(fila, 20)
     ws.set_row(fila + 1, 30)
@@ -229,7 +234,7 @@ def _tabla(ws, f, tabla: pd.DataFrame, columnas: list[Columna], fila: int):
 
     primera = fila + 1
     for i, registro in enumerate(tabla.itertuples(index=False), primera):
-        ws.set_row(i, 18)
+        ws.set_row(i, _alto_fila(registro, columnas))
         for j, (col, valor) in enumerate(zip(columnas, registro), ini):
             if valor is None or (not isinstance(valor, str) and pd.isna(valor)):
                 ws.write_blank(i, j, None, f["texto"])
@@ -287,6 +292,16 @@ def _tabla(ws, f, tabla: pd.DataFrame, columnas: list[Columna], fila: int):
     ws.fit_to_pages(1, 0)
     ws.repeat_rows(fila)
     ws.set_margins(left=0.4, right=0.4, top=0.5, bottom=0.5)
+
+
+def _alto_fila(registro, columnas: list[Columna]) -> float:
+    """Excel no ajusta solo el alto de filas con varios renglones: se estima."""
+    renglones = 1
+    for col, valor in zip(columnas, registro):
+        if col.tipo == "conceptos" and isinstance(valor, str) and valor:
+            renglones = sum(max(1, -(-len(linea) // int(col.ancho * 1.1)))
+                            for linea in valor.split("\n"))
+    return min(409, max(18, 13 * renglones + 6))
 
 
 def _letra(indice: int) -> str:

@@ -19,7 +19,13 @@ desde **Google Colab**. Todas usan el mismo código, que viene con pruebas autom
    tabla de facturas con filtros y totales que respetan el filtro.
 
 Antes de empezar eliges el modo: **sólo verificar facturas** (estado SAT, EFOS,
-cancelaciones) o **verificar y calcular contraprestación**.
+cancelaciones) o **verificar y calcular contraprestación**. En ambos modos cada factura
+trae su subtotal y total en pesos y el reporte los suma (las notas de crédito restan).
+
+**Conceptos.** Cada concepto se lee con su clave SAT, cantidad, unidad, valor unitario e
+importe. En el Excel aparecen como lista dentro de la celda "Conceptos"; en la página hay
+una pestaña con todos los conceptos y un resumen por concepto, y al seleccionar una
+factura se muestra su desglose. También se descargan en un CSV aparte.
 
 ## Reglas de cálculo
 
