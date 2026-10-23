@@ -22,6 +22,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("carpeta", help="Carpeta con XML y/o ZIP (se busca en subcarpetas)")
     p.add_argument("--desde", required=True, type=date.fromisoformat, help="AAAA-MM-DD")
     p.add_argument("--hasta", required=True, type=date.fromisoformat, help="AAAA-MM-DD")
+    p.add_argument("--solo-verificar", action="store_true",
+                   help="Sólo verificar ante el SAT, sin calcular contraprestación")
+    p.add_argument("--solo-periodo", action="store_true",
+                   help="Las facturas emitidas fuera del periodo no suman")
     p.add_argument("--tasa", type=Decimal, default=Decimal("5"), help="Porcentaje (default 5)")
     p.add_argument("--base", choices=["neto", "subtotal"], default="neto")
     p.add_argument("--tc", choices=["cfdi", "banxico", "manual"], default="cfdi",
@@ -37,13 +41,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.desde > a.hasta:
         p.error("--desde no puede ser posterior a --hasta")
+    if a.solo_verificar and a.sin_sat:
+        p.error("--solo-verificar no se puede combinar con --sin-sat")
     if a.tc == "manual" and not a.tc_manual:
         p.error("--tc manual requiere --tc-manual")
     if not os.path.isdir(a.carpeta):
         p.error(f"No existe la carpeta {a.carpeta}")
 
     config = Configuracion(
-        fecha_inicio=a.desde, fecha_fin=a.hasta, tasa=a.tasa / 100, base=a.base,
+        fecha_inicio=a.desde, fecha_fin=a.hasta, calcular=not a.solo_verificar,
+        solo_periodo=a.solo_periodo, tasa=a.tasa / 100, base=a.base,
         fuente_tc=a.tc, tc_manual=a.tc_manual, banxico_token=a.token_banxico,
         rfc_emisor=a.rfc_emisor, restar_notas_credito=not a.ignorar_notas_credito,
         verificar_sat=not a.sin_sat, incluir_no_verificadas=a.incluir_no_verificadas)
@@ -59,9 +66,15 @@ def main(argv: list[str] | None = None) -> int:
         f.write(generar_excel(resultado))
 
     print(f"Archivos procesados:  {len(resultado.detalle)}")
-    print(f"Incluidas en la base: {len(resultado.incluidas)}")
-    print(f"Base MXN:             $ {resultado.base_mxn:,.2f}")
-    print(f"Contraprestación:     $ {resultado.contraprestacion:,.2f}")
+    if config.calcular:
+        print(f"Incluidas en la base: {len(resultado.incluidas)}")
+        print(f"Base MXN:             $ {resultado.base_mxn:,.2f}")
+        print(f"Contraprestación:     $ {resultado.contraprestacion:,.2f}")
+    else:
+        print(f"Vigentes:             {resultado.contar_estado('Vigente')}")
+        print(f"Canceladas:           {resultado.contar_estado('Cancelado')}")
+        print(f"No confirmadas:       "
+              f"{resultado.contar_estado('No Encontrado') + resultado.sin_verificar}")
     for aviso in resultado.advertencias:
         print(f"⚠ {aviso}")
     print(f"Reporte: {salida}")

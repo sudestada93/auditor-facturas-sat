@@ -15,7 +15,11 @@ desde **Google Colab**. Todas usan el mismo código, que viene con pruebas autom
    está en proceso y si el emisor aparece en la **lista de EFOS (art. 69-B CFF)**.
 4. Convierte a MXN las facturas en dólares con la fuente de tipo de cambio que elijas.
 5. Calcula la base y la contraprestación, y explica por qué se excluyó cada factura.
-6. Genera un Excel con tres hojas: **Resumen**, **Detalle** e **Incidencias**.
+6. Genera un Excel de una sola hoja: encabezado con los parámetros, indicadores y la
+   tabla de facturas con filtros y totales que respetan el filtro.
+
+Antes de empezar eliges el modo: **sólo verificar facturas** (estado SAT, EFOS,
+cancelaciones) o **verificar y calcular contraprestación**.
 
 ## Reglas de cálculo
 
@@ -24,7 +28,7 @@ Una factura **entra en la base** sólo si cumple todo esto:
 | Regla | Detalle |
 |---|---|
 | Tipo de comprobante | `I` (ingreso) suma. `E` (nota de crédito) **resta** (se puede desactivar). `P`, `T` y `N` (pago, traslado, nómina) no cuentan. |
-| Periodo | Fecha de emisión dentro del rango (ambos días incluidos). |
+| Periodo | Por defecto **también suman** las facturas emitidas fuera del periodo (quedan marcadas). Con el interruptor apagado, sólo cuentan las del rango. |
 | Estado SAT | Debe estar **Vigente**. Las canceladas y las no encontradas se excluyen. Si el SAT no responde, la factura se excluye y se avisa (se puede cambiar). |
 | No duplicada | Si un UUID aparece dos veces, sólo cuenta la primera. |
 | Emisor (opcional) | Si indicas un RFC emisor, sólo cuentan las facturas que él emitió. |
@@ -50,8 +54,8 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Se abre en el navegador (`http://localhost:8501`). Arrastra los XML o ZIP, ajusta los
-parámetros de la izquierda y pulsa **Iniciar auditoría**.
+Se abre en el navegador (`http://localhost:8501`). Sigue los tres pasos: elige el modo,
+el periodo (y las reglas, si calculas) y sube los XML o ZIP.
 
 ### Publicada en internet (gratis), para usarla sin instalar nada
 
@@ -75,6 +79,8 @@ python -m auditor_cfdi /ruta/a/facturas --desde 2026-01-01 --hasta 2026-01-31
 Opciones útiles:
 
 ```
+--solo-verificar         Sólo estado ante el SAT, sin calcular contraprestación
+--solo-periodo           Las facturas fuera del periodo no suman
 --tasa 5                 Porcentaje de contraprestación
 --base neto|subtotal     Restar o no los descuentos
 --tc cfdi|banxico|manual --tc-manual 18.25 --token-banxico XXXX (o variable BANXICO_TOKEN)
@@ -108,7 +114,7 @@ auditor_cfdi/
   sat.py                   Consulta SOAP al SAT (paralela, con reintentos) y liga al verificador
   tipo_cambio.py           FIX de Banxico (serie SF60653)
   auditoria.py             Reglas de inclusión y cálculo de la contraprestación
-  reporte.py               Excel con Resumen, Detalle e Incidencias
+  reporte.py               Excel de una hoja (y la tabla que muestra la app)
   __main__.py              Línea de comandos
 tests/                     Pruebas automáticas (pytest)
 ```

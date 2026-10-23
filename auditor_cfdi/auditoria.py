@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Callable, Iterable
 
@@ -20,9 +20,9 @@ TIPOS = {"I": "Ingreso", "E": "Egreso (nota de crédito)", "P": "Pago",
          "T": "Traslado", "N": "Nómina"}
 
 FUENTES_TC = {
-    "cfdi": "El que declara cada CFDI (atributo TipoCambio)",
-    "banxico": "FIX de Banxico publicado en el DOF el día de emisión",
-    "manual": "Un tipo de cambio único para todo el periodo",
+    "cfdi": "El de cada CFDI (TipoCambio)",
+    "banxico": "FIX de Banxico (DOF) del día",
+    "manual": "Uno manual para todo el periodo",
 }
 
 BASES = {
@@ -38,6 +38,8 @@ COLUMNAS_MXN = ["Base MXN", "Contraprestación MXN"]
 class Configuracion:
     fecha_inicio: date
     fecha_fin: date
+    calcular: bool = True                  # False = sólo verificar ante el SAT
+    solo_periodo: bool = False             # True = las facturas fuera del periodo no suman
     tasa: Decimal = Decimal("0.05")
     base: str = "neto"
     fuente_tc: str = "cfdi"
@@ -67,7 +69,25 @@ class Resultado:
     @property
     def incidencias(self) -> pd.DataFrame:
         d = self.detalle
+        if not self.config.calcular:
+            return d[(d["Estado SAT"] != "Vigente") | (d["Observaciones"] != "")]
         return d[(d["¿Incluida?"] == "No") | (d["Observaciones"] != "")]
+
+    def contar_estado(self, estado: str) -> int:
+        return int((self.detalle["Estado SAT"] == estado).sum())
+
+    @property
+    def sin_verificar(self) -> int:
+        d = self.detalle
+        return int(((d["Estado SAT"] != "") & ~d["Estado SAT"].isin(sat.ESTADOS_VERIFICADOS)).sum())
+
+    @property
+    def errores_lectura(self) -> int:
+        return int(self.detalle["Motivo de exclusión"].str.startswith("Error de lectura").sum())
+
+    @property
+    def en_efos(self) -> int:
+        return int((self.detalle["Emisor en EFOS"] == "Sí").sum())
 
     @property
     def base_mxn(self) -> float:
@@ -124,13 +144,16 @@ def auditar(cfdis: list[CFDI], config: Configuracion, al_avanzar: Progreso | Non
                                      consultor=consultor_sat)
         fallidas = sum(1 for e in estados.values() if not e.verificado)
         if fallidas:
+            efecto = ""
+            if config.calcular:
+                efecto = (" (se incluyeron en el cálculo)" if config.incluir_no_verificadas
+                          else " (se excluyeron del cálculo)")
             advertencias.append(
-                f"{fallidas} factura(s) no pudieron verificarse ante el SAT "
-                f"({'se incluyeron' if config.incluir_no_verificadas else 'se excluyeron'} del cálculo). "
+                f"{fallidas} factura(s) no pudieron verificarse ante el SAT{efecto}. "
                 "Vuelve a correr la auditoría más tarde o revísalas con la liga del verificador.")
 
     tabla_fix = None
-    if config.fuente_tc == "banxico":
+    if config.calcular and config.fuente_tc == "banxico":
         fechas = [c.fecha.date() for c in cfdis if c.fecha and c.moneda == "USD"]
         if fechas:
             if not config.banxico_token:
@@ -152,10 +175,18 @@ def auditar(cfdis: list[CFDI], config: Configuracion, al_avanzar: Progreso | Non
 
 
 def _es_relevante(c: CFDI, config: Configuracion) -> bool:
+    if not config.calcular:
+        return True  # en modo verificación se consulta todo
     if c.tipo not in _tipos_que_cuentan(config):
         return False
     if config.rfc_emisor and c.rfc_emisor != config.rfc_emisor.strip().upper():
         return False
+    if config.solo_periodo:
+        return _en_periodo(c, config)
+    return True
+
+
+def _en_periodo(c: CFDI, config: Configuracion) -> bool:
     return bool(c.fecha) and config.fecha_inicio <= c.fecha.date() <= config.fecha_fin
 
 
@@ -166,7 +197,7 @@ def _tipos_que_cuentan(config: Configuracion) -> set[str]:
 def _fila_vacia() -> dict:
     return {
         "Archivo": "", "UUID": "", "Versión": "", "Tipo": "", "Serie": "", "Folio": "",
-        "Fecha emisión": None, "Periodo": "",
+        "Fecha emisión": None, "Periodo": "", "En periodo": "",
         "RFC emisor": "", "Nombre emisor": "", "RFC receptor": "", "Nombre receptor": "",
         "Moneda": "", "Subtotal": None, "Descuento": None, "Total": None,
         "Base moneda original": None, "Tipo de cambio": None, "Fuente TC": "",
@@ -209,6 +240,7 @@ def _fila(c: CFDI, config: Configuracion, estado: sat.EstadoSAT | None,
         "UUID": c.uuid, "Versión": c.version or "", "Serie": c.serie or "", "Folio": c.folio or "",
         "Tipo": f"{c.tipo} - {TIPOS.get(c.tipo, 'Desconocido')}" if c.tipo else "",
         "Fecha emisión": c.fecha, "Periodo": c.fecha.strftime("%Y-%m") if c.fecha else "",
+        "En periodo": "Sí" if _en_periodo(c, config) else "No",
         "RFC emisor": c.rfc_emisor or "", "Nombre emisor": c.nombre_emisor or "",
         "RFC receptor": c.rfc_receptor or "", "Nombre receptor": c.nombre_receptor or "",
         "Moneda": c.moneda or "", "Subtotal": float(c.subtotal), "Descuento": float(c.descuento),
@@ -241,23 +273,23 @@ def _fila(c: CFDI, config: Configuracion, estado: sat.EstadoSAT | None,
     fila["Fuente TC"] = fuente
     base_mxn = _redondear(base * tc) if tc is not None else None
     fila["Base MXN"] = float(base_mxn) if base_mxn is not None else None
-    if c.moneda not in ("MXN", "USD"):
+    if config.calcular and signo and c.moneda not in ("MXN", "USD"):
         obs.append(f"Moneda {c.moneda_original or c.moneda}: revisar tipo de cambio")
-    if c.tipo == "I" and c.metodo_pago == "PPD":
+    if config.calcular and c.tipo == "I" and c.metodo_pago == "PPD":
         obs.append("Pago en parcialidades o diferido (PPD)")
 
     # Motivo de exclusión: se reporta el primero que aplique.
     motivo = ""
-    fecha_ok = c.fecha and config.fecha_inicio <= c.fecha.date() <= config.fecha_fin
+    fecha_ok = _en_periodo(c, config)
     if duplicado_de:
         motivo = f"UUID duplicado (ya incluido en {duplicado_de})"
     elif c.tipo not in _tipos_que_cuentan(config):
         motivo = f"Tipo {fila['Tipo'] or 'desconocido'}: no forma parte de la base"
     elif config.rfc_emisor and c.rfc_emisor != config.rfc_emisor.strip().upper():
         motivo = "Emitida por un RFC distinto al auditado"
-    elif not c.fecha:
+    elif config.solo_periodo and not c.fecha:
         motivo = "Fecha de emisión inválida"
-    elif not fecha_ok:
+    elif config.solo_periodo and not fecha_ok:
         motivo = "Fuera del periodo auditado"
     elif estado is not None and estado.estado == "Cancelado":
         motivo = "Cancelada ante el SAT"
@@ -270,8 +302,13 @@ def _fila(c: CFDI, config: Configuracion, estado: sat.EstadoSAT | None,
 
     if estado is None and config.verificar_sat is False and not motivo:
         obs.append("No verificada ante el SAT")
-    elif estado is not None and not estado.verificado and not motivo:
+    elif config.calcular and estado is not None and not estado.verificado and not motivo:
         obs.append("Incluida sin verificar ante el SAT")
+
+    if not c.fecha:
+        obs.append("Fecha de emisión inválida")
+    elif not fecha_ok and not config.solo_periodo:
+        obs.append("Emitida fuera del periodo")
 
     fila["Motivo de exclusión"] = motivo
     fila["¿Incluida?"] = "No" if motivo else "Sí"
@@ -302,11 +339,16 @@ def _resumir(config: Configuracion, detalle: pd.DataFrame, advertencias: list[st
 
 
 def describir_config(config: Configuracion) -> list[tuple[str, str]]:
+    periodo = ("Periodo auditado", f"{config.fecha_inicio:%d/%m/%Y} al {config.fecha_fin:%d/%m/%Y}")
+    if not config.calcular:
+        return [("Modo", "Sólo verificación ante el SAT"), periodo]
     tc = FUENTES_TC[config.fuente_tc]
     if config.fuente_tc == "manual" and config.tc_manual:
         tc += f" ({config.tc_manual})"
     return [
-        ("Periodo auditado", f"{config.fecha_inicio:%d/%m/%Y} al {config.fecha_fin:%d/%m/%Y}"),
+        ("Modo", "Verificación y cálculo de contraprestación"),
+        periodo,
+        ("Facturas fuera del periodo", "No suman" if config.solo_periodo else "También suman"),
         ("Tasa de contraprestación", f"{float(config.tasa * 100):g} %"),
         ("Base de cálculo", BASES[config.base]),
         ("Tipo de cambio USD", tc),
@@ -314,5 +356,4 @@ def describir_config(config: Configuracion) -> list[tuple[str, str]]:
         ("Notas de crédito", "Se restan de la base" if config.restar_notas_credito else "Se ignoran"),
         ("Verificación SAT", "Sí" if config.verificar_sat else "No"),
         ("Facturas sin verificar", "Se incluyen" if config.incluir_no_verificadas else "Se excluyen"),
-        ("Generado", datetime.now().strftime("%d/%m/%Y %H:%M")),
     ]

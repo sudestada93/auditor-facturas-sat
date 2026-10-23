@@ -6,7 +6,7 @@ requires-python = ">=3.10"
 dependencies = ["pandas>=2.1", "requests>=2.31", "defusedxml>=0.7", "XlsxWriter>=3.1"]
 
 [project.optional-dependencies]
-web = ["streamlit>=1.40"]
+web = ["streamlit>=1.50"]
 
 [project.scripts]
 auditor-cfdi = "auditor_cfdi.__main__:main"

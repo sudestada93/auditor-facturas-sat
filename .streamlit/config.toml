@@ -5,5 +5,24 @@ maxUploadSize = 1000
 [browser]
 gatherUsageStats = false
 
+[client]
+toolbarMode = "viewer"
+
 [theme]
-primaryColor = "#2E4057"
+base = "light"
+primaryColor = "#918DF6"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F5F5F5"
+textColor = "#181925"
+linkColor = "#2C78FC"
+borderColor = "#E8E8E8"
+showWidgetBorder = true
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+baseFontSize = 15
+headingFontWeights = [600, 600, 500, 500, 500, 500]
+baseRadius = "0.5rem"
+buttonRadius = "full"
+dataframeHeaderBackgroundColor = "#FAFAFA"
+greenColor = "#33C758"
+greenBackgroundColor = "#DEF6E4"
+chartCategoricalColors = ["#918DF6", "#2C78FC", "#33C758", "#FFA600", "#D6409F"]

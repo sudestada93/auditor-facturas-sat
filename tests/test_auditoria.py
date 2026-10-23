@@ -46,7 +46,7 @@ def _fila(r, archivo):
 
 def test_reglas_de_inclusion(lote):
     consultor = _estados(**{_uuid(6): EstadoSAT("Cancelado", "S - OK")})
-    r = auditar_archivos(lote, Configuracion(**ENERO), consultor_sat=consultor)
+    r = auditar_archivos(lote, Configuracion(**ENERO, solo_periodo=True), consultor_sat=consultor)
 
     assert _fila(r, "mxn.xml")["Base MXN"] == 900.0
     assert _fila(r, "mxn.xml")["Contraprestación MXN"] == 45.0
@@ -76,12 +76,35 @@ def test_solo_consulta_al_sat_lo_que_puede_contar(lote):
         consultados.append(c.uuid)
         return EstadoSAT("Vigente")
 
-    auditar_archivos(lote, Configuracion(**ENERO), consultor_sat=consultor)
+    auditar_archivos(lote, Configuracion(**ENERO, solo_periodo=True), consultor_sat=consultor)
     assert sorted(consultados) == [_uuid(1), _uuid(2), _uuid(3), _uuid(6)]
+
+    consultados.clear()
+    auditar_archivos(lote, Configuracion(**ENERO, calcular=False), consultor_sat=consultor)
+    assert sorted(consultados) == [_uuid(i) for i in (1, 2, 3, 4, 5, 6)]  # sin duplicado ni roto
+
+
+def test_por_defecto_suman_las_de_fuera_del_periodo(lote):
+    r = auditar_archivos(lote, Configuracion(**ENERO), consultor_sat=_estados())
+    febrero = _fila(r, "febrero.xml")
+    assert febrero["¿Incluida?"] == "Sí" and febrero["En periodo"] == "No"
+    assert febrero["Observaciones"] == "Emitida fuera del periodo"
+    assert r.por_periodo["Periodo"].tolist() == ["2026-01", "2026-02"]
+
+
+def test_modo_solo_verificar(lote):
+    consultor = _estados(**{_uuid(6): EstadoSAT("Cancelado", "S - OK"),
+                            _uuid(4): EstadoSAT("Error de conexión", "timeout")})
+    r = auditar_archivos(lote, Configuracion(**ENERO, calcular=False), consultor_sat=consultor)
+    assert r.contar_estado("Vigente") == 4 and r.contar_estado("Cancelado") == 1
+    assert r.sin_verificar == 1 and r.errores_lectura == 1
+    assert set(r.incidencias["Archivo"]) == {"cancelada.xml", "pago.xml", "copia.xml",
+                                             "roto.xml", "febrero.xml"}
+    assert "del cálculo" not in r.advertencias[0]
 
 
 def test_opciones_de_configuracion(lote):
-    config = Configuracion(**ENERO, base="subtotal", restar_notas_credito=False,
+    config = Configuracion(**ENERO, solo_periodo=True, base="subtotal", restar_notas_credito=False,
                            fuente_tc="manual", tc_manual=Decimal("20"), tasa=Decimal("0.10"))
     r = auditar_archivos(lote, config, consultor_sat=_estados())
     assert _fila(r, "mxn.xml")["Base MXN"] == 1000.0
@@ -142,21 +165,40 @@ def test_moneda_sin_tipo_de_cambio():
     assert _fila(r, "eur.xml")["Motivo de exclusión"] == "Sin tipo de cambio para convertir a MXN"
 
 
-def test_excel(lote):
-    r = auditar_archivos(lote, Configuracion(**ENERO), consultor_sat=_estados())
-    wb = openpyxl.load_workbook(io.BytesIO(generar_excel(r)))
-    assert wb.sheetnames == ["Resumen", "Detalle", "Incidencias"]
-    detalle = wb["Detalle"]
-    encabezados = [c.value for c in detalle[1]]
-    assert encabezados[:2] == ["Archivo", "UUID"]
-    assert detalle.max_row == len(r.detalle) + 2  # encabezado + filas + fila de totales
-    col_liga = encabezados.index("Verificar en SAT") + 1
-    assert detalle.cell(2, col_liga).hyperlink.target.startswith("https://verificacfdi")
-    resumen = {row[0]: row[1] for row in wb["Resumen"].iter_rows(values_only=True) if row[0]}
-    assert resumen["Contraprestación a cobrar (MXN)"] == pytest.approx(r.contraprestacion)
+def _hoja(r):
+    ws = openpyxl.load_workbook(io.BytesIO(generar_excel(r))).active
+    filas = [list(f) for f in ws.iter_rows(values_only=True)]
+    encabezado = next(i for i, f in enumerate(filas) if "Estado SAT" in f)
+    return ws, filas, encabezado
+
+
+def test_excel_una_hoja(lote):
+    consultor = _estados(**{_uuid(6): EstadoSAT("Cancelado", "S - OK")})
+    r = auditar_archivos(lote, Configuracion(**ENERO), consultor_sat=consultor)
+    ws, filas, enc = _hoja(r)
+    assert ws.parent.sheetnames == ["Auditoría"]
+    titulos = [t for t in filas[enc] if t]
+    assert titulos[:2] == ["Estado SAT", "¿Cuenta?"] and "Contraprestación" in titulos
+    assert len(filas) == enc + 1 + len(r.detalle) + 1  # encabezado + facturas + total
+    j_liga = filas[enc].index("SAT") + 1
+    assert ws.cell(enc + 2, j_liga).hyperlink.target.startswith("https://verificacfdi")
+    indicadores = filas[enc - 5:enc]
+    assert any(r.contraprestacion in f for f in indicadores)
+    assert filas[-1][1] == "Total visible" and "SUBTOTAL(109" in str(filas[-1][15])
+    notas = filas[enc].index("Notas")
+    cancelada = next(f for f in filas if f[-1] == "cancelada.xml")
+    assert cancelada[notas] == "Cancelada ante el SAT"
+
+
+def test_excel_modo_verificacion(lote):
+    r = auditar_archivos(lote, Configuracion(**ENERO, calcular=False), consultor_sat=_estados())
+    _, filas, enc = _hoja(r)
+    assert "Contraprestación" not in filas[enc] and "EFOS" in filas[enc]
+    pago = next(f for f in filas if f[-1] == "pago.xml")
+    assert pago[filas[enc].index("Notas")] in (None, "")  # en verificación no hay exclusiones
 
 
 def test_excel_sin_facturas():
     r = auditar_archivos([], Configuracion(**ENERO))
-    wb = openpyxl.load_workbook(io.BytesIO(generar_excel(r)))
-    assert wb["Detalle"]["A1"].value == "Sin registros"
+    _, filas, enc = _hoja(r)
+    assert filas[enc + 1][1] == "No se encontraron facturas en los archivos."
