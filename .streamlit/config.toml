@@ -1,0 +1,9 @@
+[server]
+# Las descargas masivas del SAT pueden pesar bastante.
+maxUploadSize = 1000
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+primaryColor = "#2E4057"

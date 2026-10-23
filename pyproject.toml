@@ -1,0 +1,22 @@
+[project]
+name = "auditor-cfdi"
+version = "2.0.0"
+description = "Verificación de CFDIs ante el SAT y cálculo de contraprestación variable"
+requires-python = ">=3.10"
+dependencies = ["pandas>=2.1", "requests>=2.31", "defusedxml>=0.7", "XlsxWriter>=3.1"]
+
+[project.optional-dependencies]
+web = ["streamlit>=1.40"]
+
+[project.scripts]
+auditor-cfdi = "auditor_cfdi.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["auditor_cfdi"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
