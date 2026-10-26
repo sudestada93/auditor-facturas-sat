@@ -63,7 +63,7 @@ def expresion_impresa(cfdi: CFDI) -> str:
     (p. ej. 'M&M') se escapan como '&amp;', que es como el SAT espera recibirlos."""
     re_ = (cfdi.rfc_emisor or "").replace("&", "&amp;")
     rr = (cfdi.rfc_receptor or "").replace("&", "&amp;")
-    return f"?re={re_}&rr={rr}&tt={_total_para_expresion(cfdi)}&id={cfdi.uuid}"
+    return f"?re={re_}&rr={rr}&tt={_total_para_expresion(cfdi)}&id={cfdi.uuid_xml or cfdi.uuid}"
 
 
 def _valor_url(valor: str) -> str:
@@ -74,10 +74,11 @@ def _valor_url(valor: str) -> str:
 
 def liga_verificador(cfdi: CFDI) -> str:
     """Liga al verificador web del SAT con folio fiscal, RFC emisor, RFC receptor y
-    total ya capturados, en el mismo orden que el código QR del CFDI."""
+    total ya capturados, en el mismo orden que el código QR del CFDI. El folio
+    fiscal va tal cual viene en el XML (sin pasarlo a mayúsculas)."""
     if not all([cfdi.rfc_emisor, cfdi.rfc_receptor, cfdi.uuid]):
         return ""
-    liga = (f"{URL_VERIFICADOR}?id={cfdi.uuid}&re={_valor_url(cfdi.rfc_emisor)}"
+    liga = (f"{URL_VERIFICADOR}?id={cfdi.uuid_xml or cfdi.uuid}&re={_valor_url(cfdi.rfc_emisor)}"
             f"&rr={_valor_url(cfdi.rfc_receptor)}"
             f"&tt={_valor_url(cfdi.total_texto or str(cfdi.total))}")
     if cfdi.sello_ultimos8:

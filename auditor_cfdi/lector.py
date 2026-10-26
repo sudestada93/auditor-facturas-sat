@@ -48,7 +48,8 @@ class CFDI:
     tipo: str | None = None               # I, E, T, N, P
     serie: str | None = None
     folio: str | None = None
-    uuid: str | None = None
+    uuid: str | None = None               # en mayúsculas, para comparar
+    uuid_xml: str | None = None           # tal cual viene en el XML (para la liga del SAT)
     fecha: datetime | None = None
     rfc_emisor: str | None = None
     nombre_emisor: str | None = None
@@ -190,6 +191,7 @@ def leer_cfdi(contenido: bytes, archivo: str) -> CFDI:
             for elem in hijo.iter():
                 if _local(elem.tag) == "TimbreFiscalDigital" and not cfdi.uuid:
                     u = _attr(elem, "UUID")
+                    cfdi.uuid_xml = u
                     cfdi.uuid = u.upper() if u else None
 
     if not cfdi.uuid:

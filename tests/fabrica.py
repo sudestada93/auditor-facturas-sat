@@ -4,10 +4,11 @@
 def cfdi40(uuid="AAAAAAAA-1111-2222-3333-444444444444", tipo="I", fecha="2026-01-15T10:00:00",
            moneda="MXN", tipo_cambio=None, subtotal="1000.00", descuento=None, total="1160.00",
            rfc_emisor="EKU9003173C9", rfc_receptor="XAXX010101000", metodo="PUE",
-           conceptos=("Servicio de maniobras",), relacionados=None) -> bytes:
+           conceptos=("Servicio de maniobras",), relacionados=None,
+           sello="abcdefghijklmnopqrstuvwxyz12345678==") -> bytes:
     attrs = ['Version="4.0"', f'TipoDeComprobante="{tipo}"', f'Fecha="{fecha}"',
              f'Moneda="{moneda}"', f'SubTotal="{subtotal}"', f'Total="{total}"',
-             'Serie="A"', 'Folio="100"', 'Sello="abcdefghijklmnopqrstuvwxyz12345678=="',
+             'Serie="A"', 'Folio="100"', f'Sello="{sello}"',
              f'MetodoPago="{metodo}"']
     if tipo_cambio:
         attrs.append(f'TipoCambio="{tipo_cambio}"')

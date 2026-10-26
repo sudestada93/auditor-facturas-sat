@@ -234,7 +234,7 @@ def _filas_conceptos(c: CFDI, fila: dict) -> list[dict]:
         "Tipo de cambio": tc,
         "Importe neto MXN": (float(_redondear((k.importe - k.descuento) * Decimal(str(tc)) * signo))
                              if tc is not None else None),
-        "UUID": c.uuid, "Archivo": c.archivo,
+        "UUID": c.uuid_xml, "Archivo": c.archivo,
     } for k in c.conceptos]
 
 
@@ -303,7 +303,7 @@ def _fila(c: CFDI, config: Configuracion, estado: sat.EstadoSAT | None,
 
     obs: list[str] = []
     fila.update({
-        "UUID": c.uuid, "Versión": c.version or "", "Serie": c.serie or "", "Folio": c.folio or "",
+        "UUID": c.uuid_xml, "Versión": c.version or "", "Serie": c.serie or "", "Folio": c.folio or "",
         "Tipo": f"{c.tipo} - {TIPOS.get(c.tipo, 'Desconocido')}" if c.tipo else "",
         "Fecha emisión": c.fecha, "Periodo": c.fecha.strftime("%Y-%m") if c.fecha else "",
         "En periodo": "Sí" if _en_periodo(c, config) else "No",

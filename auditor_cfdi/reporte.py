@@ -240,7 +240,9 @@ def _tabla(ws, f, tabla: pd.DataFrame, columnas: list[Columna], fila: int):
                 ws.write_blank(i, j, None, f["texto"])
             elif col.tipo == "liga":
                 if valor:
-                    ws.write_url(i, j, valor, f["liga"], string=valor)  # liga completa, copiable
+                    # Texto simple, como la herramienta anterior: se copia y se pega en el
+                    # navegador. Un hipervínculo de Excel puede llegar al SAT sin los datos.
+                    ws.write_string(i, j, valor, f["texto"])
                 else:
                     ws.write_blank(i, j, None, f["texto"])
             elif col.tipo == "fecha":
