@@ -34,6 +34,18 @@ def test_liga_igual_que_el_codigo_qr():
         "&tt=1160.00&fe=345678==")
 
 
+def test_liga_identica_al_ejemplo_que_funciona():
+    # Liga real del Excel de la herramienta anterior que sí abre el verificador con datos.
+    c = leer_cfdi(cfdi40(uuid="f235a2e5-7a6d-4f8e-9013-6fc7bac95533", rfc_emisor="VEFA720411UK6",
+                         rfc_receptor="API940722K33", subtotal="430.38", total="425.00",
+                         sello="MUY+LARGO/SELLO==ne936w=="), "a.xml")
+    assert sat.liga_verificador(c) == (
+        "https://verificacfdi.facturaelectronica.sat.gob.mx/default.aspx"
+        "?id=f235a2e5-7a6d-4f8e-9013-6fc7bac95533&re=VEFA720411UK6&rr=API940722K33"
+        "&tt=425.00&fe=ne936w==")
+    assert c.uuid == "F235A2E5-7A6D-4F8E-9013-6FC7BAC95533"  # para comparar duplicados
+
+
 def test_total_formato_32():
     c = leer_cfdi(cfdi40(total="1160.5"), "a.xml")
     c.version = "3.2"

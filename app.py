@@ -323,10 +323,11 @@ def _datos_verificador(factura):
     c2.code(factura["RFC emisor"], language=None)
     c3.caption("RFC receptor")
     c3.code(factura["RFC receptor"], language=None)
-    st.link_button("Abrir verificador con los datos cargados", factura["Verificar en SAT"],
+    st.caption("Liga con los datos cargados: cópiala con el botón de la derecha y pégala en "
+               "la barra de direcciones del navegador; sólo falta escribir el código de la imagen.")
+    st.code(factura["Verificar en SAT"], language=None, wrap_lines=True)
+    st.link_button("Abrir verificador", factura["Verificar en SAT"],
                    icon=":material/open_in_new:")
-    st.caption("Sólo falta escribir el código de la imagen. Si algún campo aparece vacío, "
-               "cópialo de aquí con el botón de la derecha de cada recuadro.")
 
 
 def _desglose(vista, evento):

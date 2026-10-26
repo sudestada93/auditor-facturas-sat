@@ -182,7 +182,8 @@ def test_excel_una_hoja(lote):
     assert titulos[:2] == ["Estado SAT", "¿Cuenta?"] and "Contraprestación" in titulos
     assert len(filas) == enc + 1 + len(r.detalle) + 1  # encabezado + facturas + total
     j_liga = filas[enc].index("Verificar en SAT") + 1
-    assert ws.cell(enc + 2, j_liga).hyperlink.target.startswith("https://verificacfdi")
+    celda = ws.cell(enc + 2, j_liga)
+    assert celda.value.startswith("https://verificacfdi") and celda.hyperlink is None
     indicadores = filas[enc - 5:enc]
     assert any(r.contraprestacion in f for f in indicadores)
     assert filas[-1][1] == "Total visible" and "SUBTOTAL(109" in str(filas[-1][15])
