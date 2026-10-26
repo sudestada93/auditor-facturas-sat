@@ -21,9 +21,17 @@ def test_expresion_y_liga():
     c = leer_cfdi(cfdi40(rfc_emisor="M&amp;M010101AAA"), "a.xml")
     assert sat.expresion_impresa(c) == (
         "?re=M&amp;M010101AAA&rr=XAXX010101000&tt=1160.00&id=AAAAAAAA-1111-2222-3333-444444444444")
-    liga = sat.liga_verificador(c)
-    assert liga.startswith(sat.URL_VERIFICADOR + "?re=M%26M010101AAA&rr=")
-    assert liga.endswith("&fe=345678%3D%3D")
+    assert sat.liga_verificador(c) == (
+        sat.URL_VERIFICADOR + "?id=AAAAAAAA-1111-2222-3333-444444444444&re=M%26M010101AAA"
+        "&rr=XAXX010101000&tt=1160.00&fe=345678==")
+
+
+def test_liga_igual_que_el_codigo_qr():
+    c = leer_cfdi(cfdi40(), "a.xml")
+    assert sat.liga_verificador(c) == (
+        "https://verificacfdi.facturaelectronica.sat.gob.mx/default.aspx"
+        "?id=AAAAAAAA-1111-2222-3333-444444444444&re=EKU9003173C9&rr=XAXX010101000"
+        "&tt=1160.00&fe=345678==")
 
 
 def test_total_formato_32():

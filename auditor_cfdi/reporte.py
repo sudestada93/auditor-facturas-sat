@@ -40,7 +40,7 @@ COLUMNAS_CALCULO = [
     Columna("Subtotal", 14, "dinero"), Columna("Total", 14, "dinero"),
     Columna("Tipo de cambio", 12, "tc"), Columna("Base MXN", 16, "dinero", True),
     Columna("Contraprestación", 17, "dinero", True), Columna("Conceptos", 85, "conceptos"),
-    Columna("Notas", 40), Columna("UUID", 38), Columna("SAT", 9, "liga"),
+    Columna("Notas", 40), Columna("UUID", 38), Columna("Verificar en SAT", 30, "liga"),
     Columna("Archivo", 30),
 ]
 
@@ -53,7 +53,7 @@ COLUMNAS_VERIFICACION = [
     Columna("Total", 14, "dinero"), Columna("Tipo de cambio", 12, "tc"),
     Columna("Subtotal MXN", 16, "dinero", True), Columna("Total MXN", 16, "dinero", True),
     Columna("Conceptos", 85, "conceptos"), Columna("Estatus cancelación", 20),
-    Columna("Notas", 40), Columna("UUID", 38), Columna("SAT", 9, "liga"),
+    Columna("Notas", 40), Columna("UUID", 38), Columna("Verificar en SAT", 30, "liga"),
     Columna("Archivo", 30),
 ]
 
@@ -86,7 +86,7 @@ def tabla_reporte(resultado: Resultado) -> pd.DataFrame:
         "Contraprestación": d["Contraprestación MXN"].where(d["¿Incluida?"] == "Sí"),
         "Estatus cancelación": d["Estatus cancelación"],
         "Notas": notas, "Conceptos": d["Conceptos"], "UUID": d["UUID"],
-        "SAT": d["Verificar en SAT"], "Archivo": d["Archivo"],
+        "Verificar en SAT": d["Verificar en SAT"], "Archivo": d["Archivo"],
     })
     columnas = COLUMNAS_CALCULO if calcular else COLUMNAS_VERIFICACION
     return t[[c.titulo for c in columnas]]
@@ -240,7 +240,7 @@ def _tabla(ws, f, tabla: pd.DataFrame, columnas: list[Columna], fila: int):
                 ws.write_blank(i, j, None, f["texto"])
             elif col.tipo == "liga":
                 if valor:
-                    ws.write_url(i, j, valor, f["liga"], string="Abrir")
+                    ws.write_url(i, j, valor, f["liga"], string=valor)  # liga completa, copiable
                 else:
                     ws.write_blank(i, j, None, f["texto"])
             elif col.tipo == "fecha":
