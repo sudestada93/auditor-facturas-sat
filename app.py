@@ -263,7 +263,7 @@ def _ordenar(df, primero: list[str], quitar: tuple[str, ...] = ()):
     return df[primero + resto]
 
 
-ORDEN_FACTURAS = ["Estado SAT", "¿Cuenta?", "EFOS", "Fecha", "Serie y folio", "Emisor",
+ORDEN_FACTURAS = ["Estado SAT", "Verificar en SAT", "¿Cuenta?", "EFOS", "Fecha", "Serie y folio", "Emisor",
                   "Conceptos", "Moneda", "Subtotal", "Total", "Tipo de cambio", "Subtotal MXN",
                   "Total MXN", "Base MXN", "Contraprestación", "Notas"]
 ORDEN_CONCEPTOS = ["Estado SAT", "¿Cuenta?", "Fecha", "Serie y folio", "Emisor", "Descripción",
@@ -307,24 +307,45 @@ def _mostrar(df, clave: str | None = None):
             "Conceptos": st.column_config.TextColumn(width="large"),
             "Descripción": st.column_config.TextColumn(width="large"),
             "Notas": st.column_config.TextColumn(width="large"),
-            "SAT": st.column_config.LinkColumn(display_text="Abrir"),
+            "Verificar en SAT": st.column_config.LinkColumn(display_text="Abrir verificador"),
         }, **seleccion)
 
 
+def _datos_verificador(factura):
+    """Liga y datos listos para copiar en el verificador del SAT."""
+    if not factura["Verificar en SAT"]:
+        return
+    st.markdown("**Verificar en el SAT**")
+    c1, c2, c3 = st.columns([2.2, 1, 1])
+    c1.caption("Folio fiscal")
+    c1.code(factura["UUID"], language=None)
+    c2.caption("RFC emisor")
+    c2.code(factura["RFC emisor"], language=None)
+    c3.caption("RFC receptor")
+    c3.code(factura["RFC receptor"], language=None)
+    st.link_button("Abrir verificador con los datos cargados", factura["Verificar en SAT"],
+                   icon=":material/open_in_new:")
+    st.caption("Sólo falta escribir el código de la imagen. Si algún campo aparece vacío, "
+               "cópialo de aquí con el botón de la derecha de cada recuadro.")
+
+
 def _desglose(vista, evento):
-    """Conceptos de la factura seleccionada en la tabla."""
+    """Datos para el verificador y conceptos de la factura seleccionada."""
     filas = evento.selection.rows if evento else []
     if not filas:
-        st.caption("Haz clic en el recuadro a la izquierda de una factura para ver todos sus conceptos.")
+        st.caption("Haz clic en el recuadro a la izquierda de una factura para ver sus conceptos "
+                   "y los datos para el verificador del SAT.")
         return
     factura = vista.iloc[filas[0]]
     propios = conceptos[(conceptos["UUID"] == factura["UUID"]) &
                         (conceptos["Archivo"] == factura["Archivo"])]
     with st.container(border=True, key="tarjeta-desglose"):
-        st.markdown(f"**Conceptos de la factura {factura['Serie y folio'] or factura['UUID']}** · "
+        st.markdown(f"#### Factura {factura['Serie y folio'] or factura['UUID']} · "
                     f"{factura['Emisor']} · {factura['Fecha']:%d/%m/%Y}"
                     if factura["Fecha"] == factura["Fecha"] else
-                    f"**Conceptos de la factura {factura['UUID']}**")
+                    f"#### Factura {factura['UUID']}")
+        _datos_verificador(factura)
+        st.markdown("**Conceptos**")
         if propios.empty:
             st.write("Esta factura no tiene conceptos legibles.")
             return

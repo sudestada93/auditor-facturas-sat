@@ -58,24 +58,31 @@ def _total_para_expresion(cfdi: CFDI) -> str:
     return cfdi.total_texto or str(cfdi.total)
 
 
-def expresion_impresa(cfdi: CFDI, para_url: bool = False) -> str:
-    """Arma la expresión del código QR. Los RFC con '&' (p. ej. 'M&M') se
-    escapan como '&amp;', que es como el SAT espera recibirlos."""
+def expresion_impresa(cfdi: CFDI) -> str:
+    """Arma la expresión que se envía al servicio SOAP. Los RFC con '&'
+    (p. ej. 'M&M') se escapan como '&amp;', que es como el SAT espera recibirlos."""
     re_ = (cfdi.rfc_emisor or "").replace("&", "&amp;")
     rr = (cfdi.rfc_receptor or "").replace("&", "&amp;")
-    if para_url:
-        re_ = requests.utils.quote(cfdi.rfc_emisor or "", safe="")
-        rr = requests.utils.quote(cfdi.rfc_receptor or "", safe="")
-    expresion = f"?re={re_}&rr={rr}&tt={_total_para_expresion(cfdi)}&id={cfdi.uuid}"
-    if para_url and cfdi.sello_ultimos8 and not (cfdi.version or "").startswith("3.2"):
-        expresion += f"&fe={requests.utils.quote(cfdi.sello_ultimos8, safe='')}"
-    return expresion
+    return f"?re={re_}&rr={rr}&tt={_total_para_expresion(cfdi)}&id={cfdi.uuid}"
+
+
+def _valor_url(valor: str) -> str:
+    # Sólo se codifica lo que rompería la liga ('&', '+', '#', espacios...); '=' y '/'
+    # se dejan tal cual, igual que en la liga del código QR impreso.
+    return requests.utils.quote(valor, safe="=/")
 
 
 def liga_verificador(cfdi: CFDI) -> str:
+    """Liga al verificador web del SAT con folio fiscal, RFC emisor, RFC receptor y
+    total ya capturados, en el mismo orden que el código QR del CFDI."""
     if not all([cfdi.rfc_emisor, cfdi.rfc_receptor, cfdi.uuid]):
         return ""
-    return URL_VERIFICADOR + expresion_impresa(cfdi, para_url=True)
+    liga = (f"{URL_VERIFICADOR}?id={cfdi.uuid}&re={_valor_url(cfdi.rfc_emisor)}"
+            f"&rr={_valor_url(cfdi.rfc_receptor)}"
+            f"&tt={_valor_url(cfdi.total_texto or str(cfdi.total))}")
+    if cfdi.sello_ultimos8:
+        liga += f"&fe={_valor_url(cfdi.sello_ultimos8)}"
+    return liga
 
 
 def interpretar_respuesta(xml: bytes | str) -> EstadoSAT:
